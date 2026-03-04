@@ -1,0 +1,21 @@
+{
+  "source": {
+    "type": "postgres",
+    "host": "postgres",
+    "port": 5432,
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "benchmark",
+    "slot_name": "bench_cdcflow",
+    "publication_name": "bench_pub",
+    "tables": ["public.bench_events"]
+  },
+  "sink": {
+    "type": "kafka",
+    "brokers": "kafka:29092",
+    "topic_prefix": "cdcflow"
+  },
+  "offset": {
+    "type": "memory"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "mode": "replication",
+  "source": {
+    "type": "mysql",
+    "host": "localhost",
+    "port": 3306,
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "demo",
+    "server_id": 1002,
+    "tables": ["demo.users", "demo.orders"]
+  },
+  "sink": {
+    "type": "iceberg",
+    "catalog": {
+      "type": "rest",
+      "uri": "http://localhost:8181",
+      "warehouse": "s3://warehouse/iceberg",
+      "properties": {
+        "s3.endpoint": "http://localhost:9000",
+        "s3.access-key-id": "minioadmin",
+        "s3.secret-access-key": "minioadmin",
+        "s3.path-style-access": "true",
+        "s3.region": "us-east-1"
+      }
+    },
+    "namespace": ["demo"],
+    "table_prefix": ""
+  },
+  "offset": {
+    "type": "sqlite",
+    "path": "/tmp/cdc-offsets.db",
+    "key": "mysql-iceberg-replication"
+  }
+}

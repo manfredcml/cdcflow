@@ -1,0 +1,35 @@
+{
+  "source": {
+    "type": "postgres",
+    "host": "localhost",
+    "port": 5432,
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "demo",
+    "slot_name": "cdc_slot_iceberg",
+    "publication_name": "cdc_pub",
+    "tables": ["public.users", "public.orders"]
+  },
+  "sink": {
+    "type": "iceberg",
+    "catalog": {
+      "type": "rest",
+      "uri": "http://localhost:8181",
+      "warehouse": "s3://warehouse/iceberg",
+      "properties": {
+        "s3.endpoint": "http://localhost:9000",
+        "s3.access-key-id": "minioadmin",
+        "s3.secret-access-key": "minioadmin",
+        "s3.path-style-access": "true",
+        "s3.region": "us-east-1"
+      }
+    },
+    "namespace": ["demo"],
+    "table_prefix": ""
+  },
+  "offset": {
+    "type": "sqlite",
+    "path": "/tmp/cdc-offsets.db",
+    "key": "pg-iceberg"
+  }
+}

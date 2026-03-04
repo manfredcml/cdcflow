@@ -1,0 +1,28 @@
+{
+  "mode": "replication",
+  "source": {
+    "type": "postgres",
+    "host": "localhost",
+    "port": 5432,
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "demo",
+    "slot_name": "cdc_slot_pg_replication",
+    "publication_name": "cdc_pub",
+    "tables": ["public.users", "public.orders"]
+  },
+  "sink": {
+    "type": "postgres",
+    "host": "localhost",
+    "port": 5433,
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "demo_dest",
+    "schema": "public"
+  },
+  "offset": {
+    "type": "sqlite",
+    "path": "/tmp/cdc-offsets.db",
+    "key": "pg-pg-replication"
+  }
+}

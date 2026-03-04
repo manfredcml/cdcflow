@@ -1,0 +1,22 @@
+{
+  "source": {
+    "type": "mysql",
+    "host": "localhost",
+    "port": 3306,
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "demo",
+    "server_id": 1003,
+    "tables": ["demo.users", "demo.orders"]
+  },
+  "sink": {
+    "type": "kafka",
+    "brokers": "localhost:9092",
+    "topic_prefix": "cdc"
+  },
+  "offset": {
+    "type": "sqlite",
+    "path": "/tmp/cdc-offsets.db",
+    "key": "mysql-kafka"
+  }
+}

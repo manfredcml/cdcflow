@@ -1,0 +1,53 @@
+[package]
+name = "cdcflow"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "A Change Data Capture (CDC) pipeline in Rust"
+repository = "https://github.com/manfredcml/cdcflow"
+homepage = "https://github.com/manfredcml/cdcflow"
+readme = "README.md"
+keywords = ["cdc", "change-data-capture", "replication", "postgres", "mysql"]
+categories = ["database", "command-line-utilities"]
+exclude = ["benchmark/"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+postgres-protocol = "0.6"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = "0.3"
+mysql_async = { version = "0.36", features = ["binlog"] }
+iceberg = { version = "0.8", features = ["storage-fs", "storage-s3"] }
+iceberg-catalog-rest = "0.8"
+arrow-array = "57"
+arrow-schema = "57"
+parquet = { version = "57", default-features = false, features = ["arrow"] }
+async-trait = "0.1"
+rdkafka = { version = "0.39.0", features = ["cmake-build", "tokio"] }
+ordered-float = { version = "5.1.0", features = ["serde"] }
+chrono = "0.4"
+axum = { version = "0.8", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+rusqlite = { version = "0.38.0", features = ["bundled"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+nix = { version = "0.31.2", features = ["signal"] }
+
+[lints.clippy]
+approx_constant = "allow"
+
+[dev-dependencies]
+tower = "0.5"
+tempfile = "3"
+testcontainers = "0.27.1"
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "mysql", "kafka"] }
