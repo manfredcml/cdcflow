@@ -44,10 +44,7 @@ pub fn build_evolved_iceberg_schema(
     new_columns: &[ColumnInfo],
 ) -> Result<Schema> {
     // Carry forward all existing fields with their original IDs
-    let mut fields: Vec<Arc<NestedField>> = current_schema
-        .as_struct()
-        .fields()
-        .to_vec();
+    let mut fields: Vec<Arc<NestedField>> = current_schema.as_struct().fields().to_vec();
 
     // Determine the next available field ID
     let mut next_id = current_schema.highest_field_id() + 1;
@@ -90,10 +87,7 @@ pub fn build_evolved_cdc_schema(
     current_schema: &Schema,
     new_columns: &[ColumnInfo],
 ) -> Result<Schema> {
-    let mut fields: Vec<Arc<NestedField>> = current_schema
-        .as_struct()
-        .fields()
-        .to_vec();
+    let mut fields: Vec<Arc<NestedField>> = current_schema.as_struct().fields().to_vec();
 
     let mut next_id = current_schema.highest_field_id() + 1;
 
