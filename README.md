@@ -31,6 +31,11 @@ destinations.
 The pipeline reads events from a source, batches them by transaction boundaries, writes each batch to the sink, and
 checkpoints progress in the offset store. On restart, the pipeline resumes from the last checkpoint.
 
+## Requirements
+
+- **Platform**: Linux and macOS only
+- **CMake**: Required for building the bundled librdkafka (Kafka dependency)
+
 ## Quick Start - Standalone Mode
 
 The standalone mode runs a single pipeline without the admin server. This is ideal for local testing and development.
