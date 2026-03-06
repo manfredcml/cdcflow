@@ -184,7 +184,10 @@ async fn test_cdc_mode_insert_batch() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
         .await
         .unwrap();
 
@@ -253,7 +256,10 @@ async fn test_cdc_mode_mixed_operations() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
         .await
         .unwrap();
 
@@ -297,7 +303,10 @@ async fn test_cdc_mode_snapshot_flag() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
         .await
         .unwrap();
 
@@ -562,7 +571,10 @@ async fn test_cdc_mode_multi_table_batch() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
         .await
         .unwrap();
 
@@ -701,7 +713,10 @@ async fn test_cdc_mode_table_prefix() {
 
     let mut config = make_sink_config(&host, port);
     config.table_prefix = "cdc_".into();
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
         .await
         .unwrap();
 
