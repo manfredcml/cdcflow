@@ -16,7 +16,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Install cmake
-        run: sudo apt-get update && sudo apt-get install -y cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake libcurl4-openssl-dev
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
