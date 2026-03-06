@@ -125,6 +125,7 @@ pub async fn perform_snapshot(
 }
 
 /// Snapshot a single table via SELECT *.
+#[allow(clippy::too_many_arguments)]
 async fn snapshot_table(
     conn: &mut Conn,
     schema: &str,

@@ -135,8 +135,8 @@ pub fn event_to_json(event: &CdcEvent) -> serde_json::Value {
         "primary_key_columns": event.primary_key_columns,
     });
 
-    let row_new = event.new.as_ref().map(|r| row_to_typed_json(r));
-    let row_old = event.old.as_ref().map(|r| row_to_typed_json(r));
+    let row_new = event.new.as_ref().map(row_to_typed_json);
+    let row_old = event.old.as_ref().map(row_to_typed_json);
 
     json!({
         "metadata": metadata,

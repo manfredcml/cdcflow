@@ -47,9 +47,7 @@ pub fn build_evolved_iceberg_schema(
     let mut fields: Vec<Arc<NestedField>> = current_schema
         .as_struct()
         .fields()
-        .iter()
-        .cloned()
-        .collect();
+        .to_vec();
 
     // Determine the next available field ID
     let mut next_id = current_schema.highest_field_id() + 1;
@@ -95,9 +93,7 @@ pub fn build_evolved_cdc_schema(
     let mut fields: Vec<Arc<NestedField>> = current_schema
         .as_struct()
         .fields()
-        .iter()
-        .cloned()
-        .collect();
+        .to_vec();
 
     let mut next_id = current_schema.highest_field_id() + 1;
 

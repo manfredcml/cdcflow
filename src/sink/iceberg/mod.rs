@@ -1542,7 +1542,7 @@ mod tests {
 
     #[test]
     fn test_truncate_batch_slicing_last_position() {
-        let events = vec![
+        let events = [
             make_insert_event("users", "1"),
             make_truncate_event("users"),
             make_insert_event("users", "2"),
@@ -1560,7 +1560,7 @@ mod tests {
 
     #[test]
     fn test_truncate_only_batch_returns_empty_slice() {
-        let events = vec![make_truncate_event("users")];
+        let events = [make_truncate_event("users")];
 
         let last_truncate_pos = events.iter().rposition(|e| e.op == ChangeOp::Truncate);
         assert_eq!(last_truncate_pos, Some(0));
@@ -1571,7 +1571,7 @@ mod tests {
 
     #[test]
     fn test_truncate_followed_by_inserts() {
-        let events = vec![
+        let events = [
             make_truncate_event("users"),
             make_insert_event("users", "1"),
             make_insert_event("users", "2"),
@@ -1586,7 +1586,7 @@ mod tests {
 
     #[test]
     fn test_multiple_truncates_uses_last() {
-        let events = vec![
+        let events = [
             make_insert_event("users", "1"),
             make_truncate_event("users"),
             make_insert_event("users", "2"),
@@ -1603,7 +1603,7 @@ mod tests {
 
     #[test]
     fn test_no_truncate_returns_all() {
-        let events = vec![
+        let events = [
             make_insert_event("users", "1"),
             make_insert_event("users", "2"),
         ];
