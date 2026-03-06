@@ -14,7 +14,9 @@ pub fn admin_router(state: AdminState) -> Router {
         .route("/api/jobs", get(jobs::list_jobs).post(jobs::create_job))
         .route(
             "/api/jobs/{id}",
-            get(jobs::get_job).put(jobs::update_job).delete(jobs::delete_job),
+            get(jobs::get_job)
+                .put(jobs::update_job)
+                .delete(jobs::delete_job),
         )
         .route("/api/jobs/{id}/config", get(jobs::get_job_config))
         // Worker endpoints
@@ -24,7 +26,13 @@ pub fn admin_router(state: AdminState) -> Router {
         .route("/api/workers/deregister", post(workers::deregister_worker))
         .route("/api/workers/{id}/stop", post(workers::stop_worker))
         // Metrics endpoints
-        .route("/api/metrics/{worker_id}", get(metrics::get_metrics_history))
-        .route("/api/metrics/{worker_id}/latest", get(metrics::get_latest_metrics))
+        .route(
+            "/api/metrics/{worker_id}",
+            get(metrics::get_metrics_history),
+        )
+        .route(
+            "/api/metrics/{worker_id}/latest",
+            get(metrics::get_latest_metrics),
+        )
         .with_state(state)
 }

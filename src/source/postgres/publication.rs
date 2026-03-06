@@ -170,10 +170,7 @@ mod tests {
 
     #[test]
     fn test_build_create_publication_sql_specific_tables() {
-        let tables = vec![
-            "public.users".to_string(),
-            "public.orders".to_string(),
-        ];
+        let tables = vec!["public.users".to_string(), "public.orders".to_string()];
         let sql = build_create_publication_sql("cdc_pub", &tables);
         assert_eq!(
             sql,
@@ -195,10 +192,7 @@ mod tests {
     fn test_build_create_publication_sql_unqualified_table() {
         let tables = vec!["users".to_string()];
         let sql = build_create_publication_sql("my_pub", &tables);
-        assert_eq!(
-            sql,
-            r#"CREATE PUBLICATION "my_pub" FOR TABLE "users""#
-        );
+        assert_eq!(sql, r#"CREATE PUBLICATION "my_pub" FOR TABLE "users""#);
     }
 
     #[test]
@@ -221,7 +215,10 @@ mod tests {
         let actual = vec!["public.users".to_string(), "public.products".to_string()];
         let err = validate_tables_match("my_pub", &expected, &actual).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("my_pub"), "error should mention publication name");
+        assert!(
+            msg.contains("my_pub"),
+            "error should mention publication name"
+        );
         assert!(msg.contains("mismatch"), "error should mention mismatch");
     }
 

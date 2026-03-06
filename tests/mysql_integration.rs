@@ -204,10 +204,7 @@ async fn test_mysql_snapshot_and_stream() {
     })
     .await;
 
-    assert!(
-        stream_received.is_ok(),
-        "stream event not received in time"
-    );
+    assert!(stream_received.is_ok(), "stream event not received in time");
 
     // Verify streamed insert
     {
@@ -406,11 +403,9 @@ async fn test_mysql_resume_from_offset() {
     // Insert more data while pipeline is stopped
     {
         let mut conn = pool.get_conn().await.unwrap();
-        conn.query_drop(
-            "INSERT INTO test_users (name, email) VALUES ('Bob', 'bob@example.com')",
-        )
-        .await
-        .unwrap();
+        conn.query_drop("INSERT INTO test_users (name, email) VALUES ('Bob', 'bob@example.com')")
+            .await
+            .unwrap();
     }
 
     // Second run: should resume from saved offset (no snapshot)

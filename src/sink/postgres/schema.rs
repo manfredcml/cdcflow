@@ -53,11 +53,7 @@ fn build_fqn(schema: &str, table: &str) -> String {
 /// deletes have no new values, schema evolution may add new columns).
 ///
 /// `source_columns` is a slice of `(name, sql_type)` pairs.
-fn build_cdc_table_ddl(
-    schema: &str,
-    table: &str,
-    source_columns: &[(String, String)],
-) -> String {
+fn build_cdc_table_ddl(schema: &str, table: &str, source_columns: &[(String, String)]) -> String {
     let fqn = build_fqn(schema, table);
     let mut col_defs = vec![
         "\"_cdc_op\" text NOT NULL".to_string(),
@@ -272,11 +268,7 @@ pub async fn fetch_target_columns_with_types(
 }
 
 /// Fetch primary key column names from the target database.
-pub async fn fetch_target_pk(
-    client: &Client,
-    schema: &str,
-    table: &str,
-) -> Result<Vec<String>> {
+pub async fn fetch_target_pk(client: &Client, schema: &str, table: &str) -> Result<Vec<String>> {
     let rows = client
         .query(
             "SELECT kcu.column_name
@@ -395,11 +387,11 @@ mod tests {
         assert!(sql.contains("\"_old_id\""));
         assert!(sql.contains("\"_old_name\""));
         // Check typed placeholders
-        assert!(sql.contains("$1::text"));       // _cdc_op
-        assert!(sql.contains("$8::integer"));    // id
-        assert!(sql.contains("$9::text"));       // name
-        assert!(sql.contains("$10::integer"));   // _old_id
-        assert!(sql.contains("$11::text"));      // _old_name
+        assert!(sql.contains("$1::text")); // _cdc_op
+        assert!(sql.contains("$8::integer")); // id
+        assert!(sql.contains("$9::text")); // name
+        assert!(sql.contains("$10::integer")); // _old_id
+        assert!(sql.contains("$11::text")); // _old_name
     }
 
     #[test]
@@ -517,9 +509,7 @@ mod tests {
                 "numeric",
             ),
             (
-                CanonicalType::VarString {
-                    length: Some(255),
-                },
+                CanonicalType::VarString { length: Some(255) },
                 "character varying(255)",
             ),
             (
@@ -527,15 +517,10 @@ mod tests {
                 "character varying",
             ),
             (
-                CanonicalType::FixedString {
-                    length: Some(10),
-                },
+                CanonicalType::FixedString { length: Some(10) },
                 "character(10)",
             ),
-            (
-                CanonicalType::FixedString { length: None },
-                "character(1)",
-            ),
+            (CanonicalType::FixedString { length: None }, "character(1)"),
             (CanonicalType::Text, "text"),
             (CanonicalType::Timestamp, "timestamp without time zone"),
             (CanonicalType::TimestampTz, "timestamp with time zone"),
@@ -588,10 +573,7 @@ mod tests {
         for (mysql_type, expected_pg) in cases {
             let canonical = parse_source_type(SourceDialect::Mysql, mysql_type);
             let pg_ddl = canonical_to_pg_ddl(&canonical);
-            assert_eq!(
-                pg_ddl, expected_pg,
-                "failed for MySQL type '{mysql_type}'"
-            );
+            assert_eq!(pg_ddl, expected_pg, "failed for MySQL type '{mysql_type}'");
         }
     }
 }

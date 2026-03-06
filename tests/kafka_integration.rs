@@ -16,7 +16,7 @@ use testcontainers_modules::kafka::apache::Kafka;
 use tokio::time::timeout;
 
 use cdcflow::config::KafkaSinkConfig;
-use cdcflow::event::{ChangeOp, ColumnValue, Lsn, TableId, CdcEvent};
+use cdcflow::event::{CdcEvent, ChangeOp, ColumnValue, Lsn, TableId};
 use cdcflow::sink::kafka::KafkaSink;
 use cdcflow::sink::Sink;
 
@@ -53,7 +53,10 @@ fn make_test_event(schema: &str, table_name: &str, id: &str) -> CdcEvent {
             oid: 0,
         },
         op: ChangeOp::Insert,
-        new: Some(BTreeMap::from([("id".into(), ColumnValue::Text(id.into()))])),
+        new: Some(BTreeMap::from([(
+            "id".into(),
+            ColumnValue::Text(id.into()),
+        )])),
         old: None,
         primary_key_columns: vec![],
     }
@@ -155,9 +158,7 @@ async fn test_kafka_sink_message_key() {
         .create()
         .unwrap();
 
-    consumer
-        .subscribe(&["keytest.myschema.mytable"])
-        .unwrap();
+    consumer.subscribe(&["keytest.myschema.mytable"]).unwrap();
 
     let msg = timeout(Duration::from_secs(15), consumer.recv())
         .await

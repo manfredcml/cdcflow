@@ -28,7 +28,12 @@ pub fn build_iceberg_schema() -> Result<Schema> {
         NestedField::required(4, "snapshot", Type::Primitive(PrimitiveType::Boolean)).into(),
         NestedField::optional(5, "row_new", Type::Primitive(PrimitiveType::String)).into(),
         NestedField::optional(6, "row_old", Type::Primitive(PrimitiveType::String)).into(),
-        NestedField::optional(7, "primary_key_columns", Type::Primitive(PrimitiveType::String)).into(),
+        NestedField::optional(
+            7,
+            "primary_key_columns",
+            Type::Primitive(PrimitiveType::String),
+        )
+        .into(),
     ];
 
     Schema::builder()
@@ -54,19 +59,58 @@ pub fn build_flattened_cdc_schema(columns: &[ColumnInfo]) -> Result<Schema> {
     let mut field_id = 1i32;
 
     // 7 CDC metadata fields (required)
-    fields.push(NestedField::required(field_id, "_cdc_op", Type::Primitive(PrimitiveType::String)).into());
+    fields.push(
+        NestedField::required(field_id, "_cdc_op", Type::Primitive(PrimitiveType::String)).into(),
+    );
     field_id += 1;
-    fields.push(NestedField::required(field_id, "_cdc_lsn", Type::Primitive(PrimitiveType::Long)).into());
+    fields.push(
+        NestedField::required(field_id, "_cdc_lsn", Type::Primitive(PrimitiveType::Long)).into(),
+    );
     field_id += 1;
-    fields.push(NestedField::required(field_id, "_cdc_timestamp_us", Type::Primitive(PrimitiveType::Long)).into());
+    fields.push(
+        NestedField::required(
+            field_id,
+            "_cdc_timestamp_us",
+            Type::Primitive(PrimitiveType::Long),
+        )
+        .into(),
+    );
     field_id += 1;
-    fields.push(NestedField::required(field_id, "_cdc_snapshot", Type::Primitive(PrimitiveType::Boolean)).into());
+    fields.push(
+        NestedField::required(
+            field_id,
+            "_cdc_snapshot",
+            Type::Primitive(PrimitiveType::Boolean),
+        )
+        .into(),
+    );
     field_id += 1;
-    fields.push(NestedField::required(field_id, "_cdc_schema", Type::Primitive(PrimitiveType::String)).into());
+    fields.push(
+        NestedField::required(
+            field_id,
+            "_cdc_schema",
+            Type::Primitive(PrimitiveType::String),
+        )
+        .into(),
+    );
     field_id += 1;
-    fields.push(NestedField::required(field_id, "_cdc_table", Type::Primitive(PrimitiveType::String)).into());
+    fields.push(
+        NestedField::required(
+            field_id,
+            "_cdc_table",
+            Type::Primitive(PrimitiveType::String),
+        )
+        .into(),
+    );
     field_id += 1;
-    fields.push(NestedField::required(field_id, "_cdc_primary_key_columns", Type::Primitive(PrimitiveType::String)).into());
+    fields.push(
+        NestedField::required(
+            field_id,
+            "_cdc_primary_key_columns",
+            Type::Primitive(PrimitiveType::String),
+        )
+        .into(),
+    );
     field_id += 1;
 
     // N source columns (optional)
@@ -95,10 +139,7 @@ pub fn build_flattened_cdc_schema(columns: &[ColumnInfo]) -> Result<Schema> {
 ///
 /// PK columns are marked as required and added to identifier_field_ids.
 /// Field IDs start at 1.
-pub fn build_replication_schema(
-    columns: &[ColumnInfo],
-    pk_columns: &[String],
-) -> Result<Schema> {
+pub fn build_replication_schema(columns: &[ColumnInfo], pk_columns: &[String]) -> Result<Schema> {
     let mut fields: Vec<Arc<NestedField>> = Vec::with_capacity(columns.len());
     let mut identifier_field_ids = Vec::new();
 
@@ -180,10 +221,7 @@ mod tests {
         assert_eq!(fields[1].name, "lsn");
         assert_eq!(fields[1].id, 2);
         assert!(fields[1].required);
-        assert_eq!(
-            *fields[1].field_type,
-            Type::Primitive(PrimitiveType::Long)
-        );
+        assert_eq!(*fields[1].field_type, Type::Primitive(PrimitiveType::Long));
 
         assert_eq!(fields[2].name, "timestamp_us");
         assert_eq!(fields[2].id, 3);
@@ -258,7 +296,10 @@ mod tests {
 
         assert_eq!(fields[0].name, "_cdc_op");
         assert!(fields[0].required);
-        assert_eq!(*fields[0].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[0].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
 
         assert_eq!(fields[1].name, "_cdc_lsn");
         assert!(fields[1].required);
@@ -270,19 +311,31 @@ mod tests {
 
         assert_eq!(fields[3].name, "_cdc_snapshot");
         assert!(fields[3].required);
-        assert_eq!(*fields[3].field_type, Type::Primitive(PrimitiveType::Boolean));
+        assert_eq!(
+            *fields[3].field_type,
+            Type::Primitive(PrimitiveType::Boolean)
+        );
 
         assert_eq!(fields[4].name, "_cdc_schema");
         assert!(fields[4].required);
-        assert_eq!(*fields[4].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[4].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
 
         assert_eq!(fields[5].name, "_cdc_table");
         assert!(fields[5].required);
-        assert_eq!(*fields[5].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[5].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
 
         assert_eq!(fields[6].name, "_cdc_primary_key_columns");
         assert!(fields[6].required);
-        assert_eq!(*fields[6].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[6].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
     }
 
     #[test]
@@ -298,11 +351,17 @@ mod tests {
 
         assert_eq!(fields[8].name, "name");
         assert!(!fields[8].required);
-        assert_eq!(*fields[8].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[8].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
 
         assert_eq!(fields[9].name, "created_at");
         assert!(!fields[9].required);
-        assert_eq!(*fields[9].field_type, Type::Primitive(PrimitiveType::Timestamp));
+        assert_eq!(
+            *fields[9].field_type,
+            Type::Primitive(PrimitiveType::Timestamp)
+        );
     }
 
     #[test]
@@ -318,11 +377,17 @@ mod tests {
 
         assert_eq!(fields[11].name, "_old_name");
         assert!(!fields[11].required);
-        assert_eq!(*fields[11].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[11].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
 
         assert_eq!(fields[12].name, "_old_created_at");
         assert!(!fields[12].required);
-        assert_eq!(*fields[12].field_type, Type::Primitive(PrimitiveType::Timestamp));
+        assert_eq!(
+            *fields[12].field_type,
+            Type::Primitive(PrimitiveType::Timestamp)
+        );
     }
 
     #[test]

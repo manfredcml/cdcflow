@@ -31,9 +31,7 @@ pub async fn fetch_primary_keys(
         SourceConnectionConfig::Postgres { url } => {
             fetch_primary_keys_postgres(url, schema, table).await
         }
-        SourceConnectionConfig::Mysql { url } => {
-            fetch_primary_keys_mysql(url, schema, table).await
-        }
+        SourceConnectionConfig::Mysql { url } => fetch_primary_keys_mysql(url, schema, table).await,
     }
 }
 
@@ -154,11 +152,7 @@ async fn fetch_columns_mysql(url: &str, schema: &str, table: &str) -> Result<Vec
     Ok(columns)
 }
 
-async fn fetch_primary_keys_postgres(
-    url: &str,
-    schema: &str,
-    table: &str,
-) -> Result<Vec<String>> {
+async fn fetch_primary_keys_postgres(url: &str, schema: &str, table: &str) -> Result<Vec<String>> {
     let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
         .await
         .map_err(|e| CdcError::Schema(format!("pg connect: {e}")))?;
@@ -274,14 +268,12 @@ async fn fetch_column_subset_postgres(
     Ok(column_names
         .iter()
         .map(|name| {
-            type_map.get(name).cloned().unwrap_or_else(|| {
-                ColumnInfo {
-                    name: name.clone(),
-                    source_type: "text".into(),
-                    canonical_type: super::CanonicalType::Text,
-                    is_nullable: true,
-                    ordinal_position: 0,
-                }
+            type_map.get(name).cloned().unwrap_or_else(|| ColumnInfo {
+                name: name.clone(),
+                source_type: "text".into(),
+                canonical_type: super::CanonicalType::Text,
+                is_nullable: true,
+                ordinal_position: 0,
             })
         })
         .collect())
@@ -331,14 +323,12 @@ async fn fetch_column_subset_mysql(
     let result = column_names
         .iter()
         .map(|name| {
-            type_map.get(name).cloned().unwrap_or_else(|| {
-                ColumnInfo {
-                    name: name.clone(),
-                    source_type: "text".into(),
-                    canonical_type: super::CanonicalType::Text,
-                    is_nullable: true,
-                    ordinal_position: 0,
-                }
+            type_map.get(name).cloned().unwrap_or_else(|| ColumnInfo {
+                name: name.clone(),
+                source_type: "text".into(),
+                canonical_type: super::CanonicalType::Text,
+                is_nullable: true,
+                ordinal_position: 0,
             })
         })
         .collect();

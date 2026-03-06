@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use iceberg::spec::{NestedField, Schema, Type};
-use serde_json;
 use iceberg::table::Table;
 use iceberg::{NamespaceIdent, TableIdent, TableRequirement, TableUpdate};
 use iceberg_catalog_rest::CommitTableRequest;
+use serde_json;
 
 use crate::config::RestCatalogConfig;
 use crate::error::{CdcError, Result};
@@ -146,8 +146,8 @@ pub fn detect_dropped_columns_from_events(
     events: &[crate::event::CdcEvent],
     is_cdc: bool,
 ) -> (bool, Vec<String>) {
-    use std::collections::HashSet;
     use crate::event::ChangeOp;
+    use std::collections::HashSet;
 
     let mut event_columns: HashSet<String> = HashSet::new();
     let mut has_full_row_events = false;
@@ -317,9 +317,7 @@ pub async fn commit_schema_evolution(
             },
         ];
         let ups = vec![
-            TableUpdate::AddSchema {
-                schema: new_schema,
-            },
+            TableUpdate::AddSchema { schema: new_schema },
             TableUpdate::SetCurrentSchema {
                 schema_id: -1, // Activate the last added schema
             },
@@ -349,9 +347,8 @@ pub async fn commit_schema_evolution(
     if let Some(updates_arr) = body.get_mut("updates").and_then(|v| v.as_array_mut()) {
         for update in updates_arr.iter_mut() {
             if update.get("action").and_then(|a| a.as_str()) == Some("add-schema") {
-                update["last-column-id"] = serde_json::Value::Number(
-                    serde_json::Number::from(effective_last_column_id),
-                );
+                update["last-column-id"] =
+                    serde_json::Value::Number(serde_json::Number::from(effective_last_column_id));
             }
         }
     }
@@ -372,10 +369,7 @@ pub async fn commit_schema_evolution(
 
     let status = response.status();
     if status.is_success() {
-        tracing::info!(
-            table = table_name,
-            "schema evolution commit succeeded"
-        );
+        tracing::info!(table = table_name, "schema evolution commit succeeded");
         Ok(())
     } else {
         let body = response
@@ -404,7 +398,11 @@ mod tests {
         }
     }
 
-    fn make_event(op: ChangeOp, new: Option<BTreeMap<String, ColumnValue>>, old: Option<BTreeMap<String, ColumnValue>>) -> crate::event::CdcEvent {
+    fn make_event(
+        op: ChangeOp,
+        new: Option<BTreeMap<String, ColumnValue>>,
+        old: Option<BTreeMap<String, ColumnValue>>,
+    ) -> crate::event::CdcEvent {
         crate::event::CdcEvent {
             lsn: Lsn(100),
             timestamp_us: 1_000_000,
@@ -469,7 +467,10 @@ mod tests {
         assert_eq!(fields.len(), 3);
         assert_eq!(fields[2].name, "email");
         assert!(!fields[2].required); // Always optional for schema evolution
-        assert_eq!(*fields[2].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[2].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
     }
 
     #[test]
@@ -556,7 +557,10 @@ mod tests {
         let fields = evolved.as_struct().fields();
 
         assert_eq!(*fields[2].field_type, Type::Primitive(PrimitiveType::Long));
-        assert_eq!(*fields[3].field_type, Type::Primitive(PrimitiveType::Boolean));
+        assert_eq!(
+            *fields[3].field_type,
+            Type::Primitive(PrimitiveType::Boolean)
+        );
     }
 
     fn test_cdc_iceberg_schema() -> Schema {
@@ -564,15 +568,25 @@ mod tests {
             .with_fields(vec![
                 NestedField::required(1, "_cdc_op", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::required(2, "_cdc_lsn", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(3, "_cdc_timestamp_us", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::required(4, "_cdc_snapshot", Type::Primitive(PrimitiveType::Boolean)).into(),
-                NestedField::required(5, "_cdc_schema", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(6, "_cdc_table", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(7, "_cdc_primary_key_columns", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(3, "_cdc_timestamp_us", Type::Primitive(PrimitiveType::Long))
+                    .into(),
+                NestedField::required(4, "_cdc_snapshot", Type::Primitive(PrimitiveType::Boolean))
+                    .into(),
+                NestedField::required(5, "_cdc_schema", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(6, "_cdc_table", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(
+                    7,
+                    "_cdc_primary_key_columns",
+                    Type::Primitive(PrimitiveType::String),
+                )
+                .into(),
                 NestedField::optional(8, "id", Type::Primitive(PrimitiveType::Int)).into(),
                 NestedField::optional(9, "name", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::optional(10, "_old_id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(11, "_old_name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(11, "_old_name", Type::Primitive(PrimitiveType::String))
+                    .into(),
             ])
             .with_schema_id(0)
             .build()
@@ -599,7 +613,10 @@ mod tests {
         // email inserted before _old_ section (at index 9)
         assert_eq!(fields[9].name, "email");
         assert!(!fields[9].required);
-        assert_eq!(*fields[9].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[9].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
         assert_eq!(fields[9].id, 12); // next after highest (11)
 
         // Original _old_ columns shifted right
@@ -609,7 +626,10 @@ mod tests {
         // _old_email appended at end
         assert_eq!(fields[12].name, "_old_email");
         assert!(!fields[12].required);
-        assert_eq!(*fields[12].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[12].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
         assert_eq!(fields[12].id, 13);
     }
 
@@ -686,9 +706,12 @@ mod tests {
     fn test_evolved_schema_no_identifier_ids_when_none() {
         // Schema without identifier field IDs (CDC mode)
         let current = Schema::builder()
-            .with_fields(vec![
-                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-            ])
+            .with_fields(vec![NestedField::optional(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            .into()])
             .with_schema_id(0)
             .build()
             .unwrap();
@@ -765,15 +788,22 @@ mod tests {
                 NestedField::optional(3, "name", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::optional(4, "email", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::optional(5, "_old_id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(6, "_old_name", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(7, "_old_email", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(6, "_old_name", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::optional(7, "_old_email", Type::Primitive(PrimitiveType::String))
+                    .into(),
             ])
             .with_schema_id(0)
             .build()
             .unwrap();
 
         let result = build_schema_without_columns(&current, &["email".into()], true).unwrap();
-        let field_names: Vec<&str> = result.as_struct().fields().iter().map(|f| f.name.as_str()).collect();
+        let field_names: Vec<&str> = result
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
         assert!(!field_names.contains(&"email"));
         assert!(!field_names.contains(&"_old_email"));
         assert!(field_names.contains(&"_cdc_op"));
@@ -788,11 +818,13 @@ mod tests {
         let current = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(1, "_cdc_op", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::optional(2, "_cdc_timestamp", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "_cdc_timestamp", Type::Primitive(PrimitiveType::Long))
+                    .into(),
                 NestedField::optional(3, "id", Type::Primitive(PrimitiveType::Int)).into(),
                 NestedField::optional(4, "email", Type::Primitive(PrimitiveType::String)).into(),
                 NestedField::optional(5, "_old_id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(6, "_old_email", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(6, "_old_email", Type::Primitive(PrimitiveType::String))
+                    .into(),
             ])
             .with_schema_id(0)
             .build()
@@ -800,7 +832,12 @@ mod tests {
 
         // Even if we try to drop _cdc_op, it won't match because _cdc_op isn't a source column
         let result = build_schema_without_columns(&current, &["email".into()], true).unwrap();
-        let field_names: Vec<&str> = result.as_struct().fields().iter().map(|f| f.name.as_str()).collect();
+        let field_names: Vec<&str> = result
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
         assert!(field_names.contains(&"_cdc_op"));
         assert!(field_names.contains(&"_cdc_timestamp"));
     }

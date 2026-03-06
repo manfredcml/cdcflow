@@ -104,7 +104,9 @@ impl ReplicationStream {
                 }
                 ConvertResult::Commit(lsn) => {
                     sender
-                        .send(SourceEvent::Commit { offset: lsn.to_string() })
+                        .send(SourceEvent::Commit {
+                            offset: lsn.to_string(),
+                        })
                         .await
                         .map_err(|e| CdcError::Protocol(format!("send commit: {e}")))?;
 
@@ -201,7 +203,12 @@ mod tests {
                         sender.send(SourceEvent::Change(event)).await.unwrap();
                     }
                     ConvertResult::Commit(lsn) => {
-                        sender.send(SourceEvent::Commit { offset: lsn.to_string() }).await.unwrap();
+                        sender
+                            .send(SourceEvent::Commit {
+                                offset: lsn.to_string(),
+                            })
+                            .await
+                            .unwrap();
                     }
                     _ => {}
                 }
@@ -210,13 +217,9 @@ mod tests {
         }
 
         // Send a full transaction
-        process(
-            &mut converter,
-            &make_begin_bytes(0x100, 0, 1),
-            &tx,
-        )
-        .await
-        .unwrap();
+        process(&mut converter, &make_begin_bytes(0x100, 0, 1), &tx)
+            .await
+            .unwrap();
         process(
             &mut converter,
             &make_relation_bytes(1, "public", "t", &["id"]),
@@ -224,20 +227,12 @@ mod tests {
         )
         .await
         .unwrap();
-        process(
-            &mut converter,
-            &make_insert_bytes(1, &["42"]),
-            &tx,
-        )
-        .await
-        .unwrap();
-        process(
-            &mut converter,
-            &make_commit_bytes(0x200),
-            &tx,
-        )
-        .await
-        .unwrap();
+        process(&mut converter, &make_insert_bytes(1, &["42"]), &tx)
+            .await
+            .unwrap();
+        process(&mut converter, &make_commit_bytes(0x200), &tx)
+            .await
+            .unwrap();
 
         drop(tx);
 
@@ -249,7 +244,8 @@ mod tests {
 
         assert_eq!(events.len(), 2); // 1 Change + 1 Commit
         assert!(matches!(&events[0], SourceEvent::Change(_)));
-        assert!(matches!(&events[1], SourceEvent::Commit { offset } if *offset == Lsn(0x200).to_string()));
+        assert!(
+            matches!(&events[1], SourceEvent::Commit { offset } if *offset == Lsn(0x200).to_string())
+        );
     }
-
 }

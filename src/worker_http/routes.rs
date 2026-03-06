@@ -36,7 +36,12 @@ pub async fn metrics(State(state): State<WorkerState>) -> impl IntoResponse {
 
 pub async fn stop(State(state): State<WorkerState>) -> impl IntoResponse {
     state.shutdown.cancel();
-    (StatusCode::OK, Json(StopResponse { message: "shutdown initiated" }))
+    (
+        StatusCode::OK,
+        Json(StopResponse {
+            message: "shutdown initiated",
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -44,8 +49,8 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use axum::Router;
     use axum::routing::{get, post};
+    use axum::Router;
     use tower::ServiceExt;
 
     fn test_router() -> Router {
@@ -68,7 +73,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
@@ -89,7 +96,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["events_total"], 42);
         assert_eq!(json["batches_total"], 1);

@@ -67,7 +67,9 @@ impl Sink for KafkaSink {
         let futs: Vec<_> = prepared
             .iter()
             .map(|(topic, key, json)| {
-                let record = FutureRecord::to(topic).key(key.as_str()).payload(json.as_str());
+                let record = FutureRecord::to(topic)
+                    .key(key.as_str())
+                    .payload(json.as_str());
                 self.producer.send(record, Duration::from_secs(5))
             })
             .collect();
@@ -81,9 +83,9 @@ impl Sink for KafkaSink {
     }
 
     async fn flush(&mut self) -> Result<()> {
-        self.producer.flush(Duration::from_secs(30)).map_err(|e| {
-            CdcError::Kafka(format!("flush failed: {e}"))
-        })
+        self.producer
+            .flush(Duration::from_secs(30))
+            .map_err(|e| CdcError::Kafka(format!("flush failed: {e}")))
     }
 }
 
@@ -108,10 +110,7 @@ mod tests {
     #[test]
     fn test_topic_name_special_characters() {
         let table = make_test_table("my-schema", "my_table.v2");
-        assert_eq!(
-            topic_name("prefix", &table),
-            "prefix.my-schema.my_table.v2"
-        );
+        assert_eq!(topic_name("prefix", &table), "prefix.my-schema.my_table.v2");
     }
 
     #[test]
@@ -119,5 +118,4 @@ mod tests {
         let table = make_test_table("public", "users");
         assert_eq!(message_key(&table), "public.users");
     }
-
 }

@@ -214,7 +214,9 @@ fn parse_truncate(buf: &mut &[u8]) -> Result<PgOutputMessage> {
     let options = buf.get_u8();
 
     if buf.remaining() < (num_relations as usize) * 4 {
-        return Err(CdcError::Protocol("Truncate: not enough relation IDs".into()));
+        return Err(CdcError::Protocol(
+            "Truncate: not enough relation IDs".into(),
+        ));
     }
     let mut rel_ids = Vec::with_capacity(num_relations as usize);
     for _ in 0..num_relations {
@@ -332,11 +334,7 @@ mod tests {
             "public",
             "users",
             b'd',
-            &[
-                (1, "id", 23, -1),
-                (0, "name", 25, -1),
-                (0, "email", 25, -1),
-            ],
+            &[(1, "id", 23, -1), (0, "name", 25, -1), (0, "email", 25, -1)],
         );
         match parse(&data).unwrap() {
             PgOutputMessage::Relation(r) => {
@@ -400,10 +398,7 @@ mod tests {
             PgOutputMessage::Update(u) => {
                 assert_eq!(u.rel_id, 16384);
                 assert!(u.old_tuple.is_none());
-                assert_eq!(
-                    u.new_tuple.columns[0],
-                    TupleColumn::Text("updated".into())
-                );
+                assert_eq!(u.new_tuple.columns[0], TupleColumn::Text("updated".into()));
             }
             _ => panic!("expected Update"),
         }
@@ -425,10 +420,7 @@ mod tests {
                     u.old_tuple.unwrap().columns[0],
                     TupleColumn::Text("old_id".into())
                 );
-                assert_eq!(
-                    u.new_tuple.columns[0],
-                    TupleColumn::Text("new_id".into())
-                );
+                assert_eq!(u.new_tuple.columns[0], TupleColumn::Text("new_id".into()));
             }
             _ => panic!("expected Update"),
         }
@@ -588,10 +580,7 @@ mod tests {
     fn test_parse_insert_with_unchanged_toast() {
         let data = make_insert(
             1,
-            &[
-                TupleColumn::Text("1".into()),
-                TupleColumn::UnchangedToast,
-            ],
+            &[TupleColumn::Text("1".into()), TupleColumn::UnchangedToast],
         );
         match parse(&data).unwrap() {
             PgOutputMessage::Insert(i) => {

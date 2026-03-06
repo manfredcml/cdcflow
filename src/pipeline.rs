@@ -59,9 +59,7 @@ where
         let mut offset_store = self.offset_store;
 
         let source_shutdown = shutdown.clone();
-        let source_handle = tokio::spawn(async move {
-            source.start(tx, source_shutdown).await
-        });
+        let source_handle = tokio::spawn(async move { source.start(tx, source_shutdown).await });
 
         let metrics = self.metrics;
 
@@ -268,7 +266,10 @@ mod tests {
                 oid: 1,
             },
             op: ChangeOp::Insert,
-            new: Some(BTreeMap::from([("id".into(), ColumnValue::Text(id.into()))])),
+            new: Some(BTreeMap::from([(
+                "id".into(),
+                ColumnValue::Text(id.into()),
+            )])),
             old: None,
             primary_key_columns: vec!["id".into()],
         }
@@ -280,7 +281,9 @@ mod tests {
             events: vec![
                 SourceEvent::Change(make_event("users", "1", 0x100)),
                 SourceEvent::Change(make_event("users", "2", 0x100)),
-                SourceEvent::Commit { offset: Lsn(0x200).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x200).to_string(),
+                },
             ],
         };
 
@@ -303,10 +306,14 @@ mod tests {
         let source = MockSource {
             events: vec![
                 SourceEvent::Change(make_event("users", "1", 0x100)),
-                SourceEvent::Commit { offset: Lsn(0x200).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x200).to_string(),
+                },
                 SourceEvent::Change(make_event("users", "2", 0x300)),
                 SourceEvent::Change(make_event("users", "3", 0x300)),
-                SourceEvent::Commit { offset: Lsn(0x400).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x400).to_string(),
+                },
             ],
         };
 
@@ -330,7 +337,9 @@ mod tests {
         let source = MockSource {
             events: vec![
                 SourceEvent::Change(make_event("users", "1", 0x100)),
-                SourceEvent::Checkpoint { offset: Lsn(0x100).to_string() },
+                SourceEvent::Checkpoint {
+                    offset: Lsn(0x100).to_string(),
+                },
             ],
         };
 
@@ -350,7 +359,9 @@ mod tests {
     #[tokio::test]
     async fn test_pipeline_empty_commit() {
         let source = MockSource {
-            events: vec![SourceEvent::Commit { offset: Lsn(0x100).to_string() }],
+            events: vec![SourceEvent::Commit {
+                offset: Lsn(0x100).to_string(),
+            }],
         };
 
         let (sink, batches, _) = MockSink::new();
@@ -377,9 +388,11 @@ mod tests {
         tx.send(SourceEvent::Change(make_event("t", "1", 0x100)))
             .await
             .unwrap();
-        tx.send(SourceEvent::Commit { offset: Lsn(0x200).to_string() })
-            .await
-            .unwrap();
+        tx.send(SourceEvent::Commit {
+            offset: Lsn(0x200).to_string(),
+        })
+        .await
+        .unwrap();
 
         shutdown.cancel();
 
@@ -403,7 +416,9 @@ mod tests {
         let source = MockSource {
             events: vec![
                 SourceEvent::Change(make_event("t", "10", 0x600)),
-                SourceEvent::Commit { offset: Lsn(0x700).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x700).to_string(),
+                },
             ],
         };
 
@@ -425,9 +440,13 @@ mod tests {
             events: vec![
                 SourceEvent::Change(make_event("users", "1", 0x100)),
                 SourceEvent::Change(make_event("users", "2", 0x100)),
-                SourceEvent::Commit { offset: Lsn(0x200).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x200).to_string(),
+                },
                 SourceEvent::Change(make_event("users", "3", 0x300)),
-                SourceEvent::Commit { offset: Lsn(0x400).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x400).to_string(),
+                },
             ],
         };
 
@@ -436,8 +455,7 @@ mod tests {
         let metrics = PipelineMetrics::new();
 
         let shutdown = CancellationToken::new();
-        let pipeline = Pipeline::new(source, sink, offset_store)
-            .with_metrics(metrics.clone());
+        let pipeline = Pipeline::new(source, sink, offset_store).with_metrics(metrics.clone());
         pipeline.run(shutdown).await.unwrap();
 
         let snap = metrics.snapshot();
@@ -453,7 +471,9 @@ mod tests {
         let source = MockSource {
             events: vec![
                 SourceEvent::Change(make_event("t", "1", 0x100)),
-                SourceEvent::Commit { offset: Lsn(0x200).to_string() },
+                SourceEvent::Commit {
+                    offset: Lsn(0x200).to_string(),
+                },
             ],
         };
 
@@ -477,7 +497,9 @@ mod tests {
         let mut events: Vec<SourceEvent> = (0..event_count)
             .map(|i| SourceEvent::Change(make_event("t", &i.to_string(), 0x100)))
             .collect();
-        events.push(SourceEvent::Commit { offset: Lsn(0x200).to_string() });
+        events.push(SourceEvent::Commit {
+            offset: Lsn(0x200).to_string(),
+        });
 
         let source = MockSource { events };
         let (sink, batches, flush_count) = MockSink::new();
@@ -510,7 +532,9 @@ mod tests {
         let mut events: Vec<SourceEvent> = (0..MAX_BATCH_SIZE)
             .map(|i| SourceEvent::Change(make_event("t", &i.to_string(), 0x100)))
             .collect();
-        events.push(SourceEvent::Commit { offset: Lsn(0x200).to_string() });
+        events.push(SourceEvent::Commit {
+            offset: Lsn(0x200).to_string(),
+        });
 
         let source = MockSource { events };
         let (sink, batches, _) = MockSink::new();

@@ -35,10 +35,7 @@ pub async fn create_slot(client: &Client, slot_name: &str) -> Result<Lsn> {
 /// Drop a replication slot.
 pub async fn drop_slot(client: &Client, slot_name: &str) -> Result<()> {
     client
-        .execute(
-            "SELECT pg_drop_replication_slot($1)",
-            &[&slot_name],
-        )
+        .execute("SELECT pg_drop_replication_slot($1)", &[&slot_name])
         .await
         .map_err(|e| CdcError::Protocol(format!("drop slot '{slot_name}': {e}")))?;
 
@@ -87,4 +84,3 @@ pub async fn get_slot_info(client: &Client, slot_name: &str) -> Result<Option<Sl
 pub async fn slot_exists(client: &Client, slot_name: &str) -> Result<bool> {
     Ok(get_slot_info(client, slot_name).await?.is_some())
 }
-

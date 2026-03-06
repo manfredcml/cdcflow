@@ -11,9 +11,8 @@ use crate::schema::SourceDialect;
 use crate::sink::Sink;
 
 use schema::{
-    add_columns, build_cdc_insert, canonical_to_pg_ddl, create_cdc_table,
-    create_replication_table, drop_columns, fetch_target_columns_with_types, fetch_target_pk,
-    table_exists,
+    add_columns, build_cdc_insert, canonical_to_pg_ddl, create_cdc_table, create_replication_table,
+    drop_columns, fetch_target_columns_with_types, fetch_target_pk, table_exists,
 };
 
 use crate::schema::value::column_value_to_string;
@@ -70,11 +69,7 @@ impl PostgresSink {
     }
 
     /// Ensure the target table is ready.
-    async fn ensure_table(
-        &mut self,
-        source_schema: &str,
-        source_table: &str,
-    ) -> Result<()> {
+    async fn ensure_table(&mut self, source_schema: &str, source_table: &str) -> Result<()> {
         let key = (source_schema.to_string(), source_table.to_string());
         if self.tables.contains_key(&key) {
             return Ok(());
@@ -88,21 +83,27 @@ impl PostgresSink {
         match self.mode {
             SinkMode::Cdc => {
                 // CDC mode uses flattened typed columns: 7 _cdc_* metadata + N source + N _old_
-                let exists =
-                    table_exists(&self.client, &target_schema, &target_table).await?;
+                let exists = table_exists(&self.client, &target_schema, &target_table).await?;
 
                 if exists {
-                    let typed_columns =
-                        fetch_target_columns_with_types(&self.client, &target_schema, &target_table)
-                            .await?;
+                    let typed_columns = fetch_target_columns_with_types(
+                        &self.client,
+                        &target_schema,
+                        &target_table,
+                    )
+                    .await?;
                     let source_cols: Vec<String> = typed_columns
                         .iter()
-                        .filter(|(name, _)| !name.starts_with("_cdc_") && !name.starts_with("_old_"))
+                        .filter(|(name, _)| {
+                            !name.starts_with("_cdc_") && !name.starts_with("_old_")
+                        })
                         .map(|(name, _)| name.clone())
                         .collect();
                     let column_types: HashMap<String, String> = typed_columns
                         .iter()
-                        .filter(|(name, _)| !name.starts_with("_cdc_") && !name.starts_with("_old_"))
+                        .filter(|(name, _)| {
+                            !name.starts_with("_cdc_") && !name.starts_with("_old_")
+                        })
                         .cloned()
                         .collect();
 
@@ -140,18 +141,12 @@ impl PostgresSink {
                         })
                         .collect();
 
-                    create_cdc_table(
-                        &self.client,
-                        &target_schema,
-                        &target_table,
-                        &typed_columns,
-                    )
-                    .await?;
+                    create_cdc_table(&self.client, &target_schema, &target_table, &typed_columns)
+                        .await?;
 
                     let col_names: Vec<String> =
                         typed_columns.iter().map(|(name, _)| name.clone()).collect();
-                    let column_types: HashMap<String, String> =
-                        typed_columns.into_iter().collect();
+                    let column_types: HashMap<String, String> = typed_columns.into_iter().collect();
 
                     self.tables.insert(
                         key,
@@ -165,13 +160,15 @@ impl PostgresSink {
                 }
             }
             SinkMode::Replication => {
-                let exists =
-                    table_exists(&self.client, &target_schema, &target_table).await?;
+                let exists = table_exists(&self.client, &target_schema, &target_table).await?;
 
                 if exists {
-                    let typed_columns =
-                        fetch_target_columns_with_types(&self.client, &target_schema, &target_table)
-                            .await?;
+                    let typed_columns = fetch_target_columns_with_types(
+                        &self.client,
+                        &target_schema,
+                        &target_table,
+                    )
+                    .await?;
                     let pk_columns =
                         fetch_target_pk(&self.client, &target_schema, &target_table).await?;
                     if pk_columns.is_empty() {
@@ -182,8 +179,7 @@ impl PostgresSink {
                     }
                     let columns: Vec<String> =
                         typed_columns.iter().map(|(name, _)| name.clone()).collect();
-                    let column_types: HashMap<String, String> =
-                        typed_columns.into_iter().collect();
+                    let column_types: HashMap<String, String> = typed_columns.into_iter().collect();
                     self.tables.insert(
                         key,
                         TableInfo {
@@ -250,8 +246,7 @@ impl PostgresSink {
 
                     let col_names: Vec<String> =
                         typed_columns.iter().map(|(name, _)| name.clone()).collect();
-                    let column_types: HashMap<String, String> =
-                        typed_columns.into_iter().collect();
+                    let column_types: HashMap<String, String> = typed_columns.into_iter().collect();
 
                     self.tables.insert(
                         key,
@@ -288,13 +283,13 @@ impl PostgresSink {
                 CdcError::Config(format!("table {}.{} not prepared", schema, table))
             })?;
 
-            let new_cols =
-                crate::schema::evolution::detect_new_columns(&info.columns, group);
+            let new_cols = crate::schema::evolution::detect_new_columns(&info.columns, group);
 
             if !new_cols.is_empty() {
                 let source_conn = self.source_connection.as_ref().ok_or_else(|| {
                     CdcError::Config(
-                        "postgres sink CDC mode requires source_connection for schema evolution".into(),
+                        "postgres sink CDC mode requires source_connection for schema evolution"
+                            .into(),
                     )
                 })?;
                 let dialect = SourceDialect::from(source_conn);
@@ -318,10 +313,8 @@ impl PostgresSink {
                 }
 
                 let target_schema = &self.config.schema;
-                let target_table =
-                    format!("{}{}", self.config.table_prefix, table);
-                add_columns(&self.client, target_schema, &target_table, &typed_cols)
-                    .await?;
+                let target_table = format!("{}{}", self.config.table_prefix, table);
+                add_columns(&self.client, target_schema, &target_table, &typed_cols).await?;
 
                 let info_mut = self.tables.get_mut(&key).unwrap();
                 for col in &source_columns {
@@ -368,18 +361,12 @@ impl PostgresSink {
                 ));
 
                 for col in &info.columns {
-                    let val = event
-                        .new
-                        .as_ref()
-                        .and_then(|r| r.get(col));
+                    let val = event.new.as_ref().and_then(|r| r.get(col));
                     values.push(column_value_to_string(val));
                 }
 
                 for col in &info.columns {
-                    let val = event
-                        .old
-                        .as_ref()
-                        .and_then(|r| r.get(col));
+                    let val = event.old.as_ref().and_then(|r| r.get(col));
                     values.push(column_value_to_string(val));
                 }
 
@@ -415,8 +402,7 @@ impl PostgresSink {
                 CdcError::Config(format!("table {}.{} not prepared", schema, table))
             })?;
 
-            let new_cols =
-                crate::schema::evolution::detect_new_columns(&info.columns, group);
+            let new_cols = crate::schema::evolution::detect_new_columns(&info.columns, group);
 
             if !new_cols.is_empty() {
                 // Look up the actual SQL types from the source database.
@@ -446,10 +432,8 @@ impl PostgresSink {
                     .collect();
 
                 let target_schema = &self.config.schema;
-                let target_table =
-                    format!("{}{}", self.config.table_prefix, table);
-                add_columns(&self.client, target_schema, &target_table, &typed_cols)
-                    .await?;
+                let target_table = format!("{}{}", self.config.table_prefix, table);
+                add_columns(&self.client, target_schema, &target_table, &typed_cols).await?;
 
                 let info_mut = self.tables.get_mut(&key).unwrap();
                 for (name, typ) in typed_cols {
@@ -503,12 +487,9 @@ impl PostgresSink {
                 if !missing_from_events.is_empty() {
                     // Confirm the drop by querying the source database
                     if let Some(source_conn) = self.source_connection.as_ref() {
-                        let source_cols = crate::schema::discovery::fetch_columns(
-                            source_conn,
-                            schema,
-                            table,
-                        )
-                        .await?;
+                        let source_cols =
+                            crate::schema::discovery::fetch_columns(source_conn, schema, table)
+                                .await?;
                         let source_col_names: Vec<String> =
                             source_cols.iter().map(|c| c.name.clone()).collect();
 
@@ -531,15 +512,9 @@ impl PostgresSink {
 
                         if !dropped.is_empty() {
                             let target_schema = &self.config.schema;
-                            let target_table =
-                                format!("{}{}", self.config.table_prefix, table);
-                            drop_columns(
-                                &self.client,
-                                target_schema,
-                                &target_table,
-                                &dropped,
-                            )
-                            .await?;
+                            let target_table = format!("{}{}", self.config.table_prefix, table);
+                            drop_columns(&self.client, target_schema, &target_table, &dropped)
+                                .await?;
                             tracing::info!(
                                 table = %format!("{}.{}", schema, table),
                                 ?dropped,
@@ -807,14 +782,21 @@ mod tests {
     }
 
     fn make_column_types(entries: &[(&str, &str)]) -> HashMap<String, String> {
-        entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn test_build_upsert_sql() {
         let cols = vec!["id".into(), "name".into(), "email".into()];
         let pk = vec!["id".into()];
-        let types = make_column_types(&[("id", "integer"), ("name", "text"), ("email", "character varying(255)")]);
+        let types = make_column_types(&[
+            ("id", "integer"),
+            ("name", "text"),
+            ("email", "character varying(255)"),
+        ]);
         let sql = build_upsert_sql("\"public\".\"users\"", &cols, &pk, &types);
         assert_eq!(
             sql,
@@ -851,5 +833,4 @@ mod tests {
             "DELETE FROM \"public\".\"users\" WHERE \"tenant_id\" = $1::uuid AND \"user_id\" = $2::bigint"
         );
     }
-
 }

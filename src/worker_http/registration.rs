@@ -60,7 +60,11 @@ impl AdminClient {
     /// Pull job configuration from the admin server.
     pub async fn pull_config(&self, job_name: &str) -> Result<Config> {
         let url = format!("{}/api/jobs/{}/config", self.base_url, job_name);
-        let resp = self.client.get(&url).send().await
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| CdcError::Http(format!("pull_config failed: {e}")))?;
 
         if !resp.status().is_success() {
@@ -71,7 +75,8 @@ impl AdminClient {
             )));
         }
 
-        resp.json::<Config>().await
+        resp.json::<Config>()
+            .await
             .map_err(|e| CdcError::Http(format!("pull_config parse error: {e}")))
     }
 
@@ -89,7 +94,12 @@ impl AdminClient {
             pid,
         };
 
-        let resp = self.client.post(&url).json(&req).send().await
+        let resp = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
             .map_err(|e| CdcError::Http(format!("register failed: {e}")))?;
 
         if !resp.status().is_success() {
@@ -111,7 +121,12 @@ impl AdminClient {
             metrics: metrics.snapshot(),
         };
 
-        let resp = self.client.post(&url).json(&req).send().await
+        let resp = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
             .map_err(|e| CdcError::Http(format!("heartbeat failed: {e}")))?;
 
         if !resp.status().is_success() {
@@ -131,14 +146,16 @@ impl AdminClient {
             worker_id: self.worker_id.clone(),
         };
 
-        let resp = self.client.post(&url).json(&req).send().await
+        let resp = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
             .map_err(|e| CdcError::Http(format!("deregister failed: {e}")))?;
 
         if !resp.status().is_success() {
-            tracing::warn!(
-                "deregister returned {}, ignoring",
-                resp.status()
-            );
+            tracing::warn!("deregister returned {}, ignoring", resp.status());
         }
 
         Ok(())
@@ -225,36 +242,45 @@ mod tests {
         };
 
         let app = Router::new()
-            .route("/api/workers/register", post({
-                let state = state.clone();
-                move |_body: Json<serde_json::Value>| {
+            .route(
+                "/api/workers/register",
+                post({
                     let state = state.clone();
-                    async move {
-                        state.register_count.fetch_add(1, Ordering::Relaxed);
-                        Json(serde_json::json!({"status": "ok"}))
+                    move |_body: Json<serde_json::Value>| {
+                        let state = state.clone();
+                        async move {
+                            state.register_count.fetch_add(1, Ordering::Relaxed);
+                            Json(serde_json::json!({"status": "ok"}))
+                        }
                     }
-                }
-            }))
-            .route("/api/workers/heartbeat", post({
-                let state = state.clone();
-                move |_body: Json<serde_json::Value>| {
+                }),
+            )
+            .route(
+                "/api/workers/heartbeat",
+                post({
                     let state = state.clone();
-                    async move {
-                        state.heartbeat_count.fetch_add(1, Ordering::Relaxed);
-                        Json(serde_json::json!({"status": "ok"}))
+                    move |_body: Json<serde_json::Value>| {
+                        let state = state.clone();
+                        async move {
+                            state.heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                            Json(serde_json::json!({"status": "ok"}))
+                        }
                     }
-                }
-            }))
-            .route("/api/workers/deregister", post({
-                let state = state.clone();
-                move |_body: Json<serde_json::Value>| {
+                }),
+            )
+            .route(
+                "/api/workers/deregister",
+                post({
                     let state = state.clone();
-                    async move {
-                        state.deregister_count.fetch_add(1, Ordering::Relaxed);
-                        Json(serde_json::json!({"status": "ok"}))
+                    move |_body: Json<serde_json::Value>| {
+                        let state = state.clone();
+                        async move {
+                            state.deregister_count.fetch_add(1, Ordering::Relaxed);
+                            Json(serde_json::json!({"status": "ok"}))
+                        }
                     }
-                }
-            }));
+                }),
+            );
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -302,11 +328,7 @@ mod tests {
         let metrics = PipelineMetrics::new();
         let shutdown = CancellationToken::new();
 
-        let handle = client.spawn_heartbeat(
-            metrics,
-            Duration::from_millis(50),
-            shutdown.clone(),
-        );
+        let handle = client.spawn_heartbeat(metrics, Duration::from_millis(50), shutdown.clone());
 
         // Wait enough for ~3 heartbeats
         tokio::time::sleep(Duration::from_millis(180)).await;
@@ -324,5 +346,4 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("register failed"));
     }
-
 }

@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
-use mysql_async::{BinlogStream, Pool};
 use mysql_async::binlog::events::EventData;
+use mysql_async::{BinlogStream, Pool};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -99,9 +99,7 @@ impl BinlogStreamRunner {
             EventData::RowsEvent(ref rows_data) => {
                 let table_id = rows_data.table_id();
                 let tme = stream.get_tme(table_id).ok_or_else(|| {
-                    CdcError::Mysql(format!(
-                        "no TableMapEvent cached for table_id {table_id}"
-                    ))
+                    CdcError::Mysql(format!("no TableMapEvent cached for table_id {table_id}"))
                 })?;
 
                 let schema = tme.database_name().into_owned();
@@ -110,7 +108,10 @@ impl BinlogStreamRunner {
 
                 // Refresh column name cache when schema changes (e.g. ALTER TABLE ADD COLUMN).
                 // Prefer TABLE_MAP optional metadata (race-free) over info_schema query.
-                if self.converter.cache_needs_refresh(&schema, &table, num_columns) {
+                if self
+                    .converter
+                    .cache_needs_refresh(&schema, &table, num_columns)
+                {
                     if let Some(names) = EventConverter::extract_column_names_from_tme(tme) {
                         tracing::info!(
                             schema,
@@ -144,8 +145,7 @@ impl BinlogStreamRunner {
                             .update_column_cache(&schema, &table, fresh_columns);
                         self.converter
                             .update_boolean_cache(&schema, &table, fresh_booleans);
-                        self.converter
-                            .update_pk_cache(&schema, &table, fresh_pk);
+                        self.converter.update_pk_cache(&schema, &table, fresh_pk);
                         self.converter
                             .update_column_types(&schema, &table, fresh_types);
                     }
@@ -193,7 +193,9 @@ impl BinlogStreamRunner {
                 if let Some((truncate_schema, truncate_table)) =
                     EventConverter::parse_truncate_query(&query, &schema)
                 {
-                    let pk_columns = self.converter.get_pk_columns(&truncate_schema, &truncate_table);
+                    let pk_columns = self
+                        .converter
+                        .get_pk_columns(&truncate_schema, &truncate_table);
                     let event = EventConverter::make_truncate_event(
                         &truncate_schema,
                         &truncate_table,

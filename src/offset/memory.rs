@@ -45,4 +45,3 @@ impl OffsetStore for MemoryOffsetStore {
         Ok(())
     }
 }
-

@@ -56,7 +56,9 @@ pub async fn perform_snapshot(
 
     // Send final checkpoint so the pipeline persists the snapshot LSN
     sender
-        .send(SourceEvent::Checkpoint { offset: snapshot_lsn.to_string() })
+        .send(SourceEvent::Checkpoint {
+            offset: snapshot_lsn.to_string(),
+        })
         .await
         .map_err(|e| CdcError::Snapshot(format!("send checkpoint: {e}")))?;
 
@@ -99,7 +101,11 @@ async fn snapshot_table(
         .unwrap_or_default()
         .as_micros() as i64;
 
-    let copy_query = format!("COPY {}.{} TO STDOUT", quote_ident(schema), quote_ident(name));
+    let copy_query = format!(
+        "COPY {}.{} TO STDOUT",
+        quote_ident(schema),
+        quote_ident(name)
+    );
     let stream = client
         .copy_out(&copy_query)
         .await
@@ -111,14 +117,21 @@ async fn snapshot_table(
     let mut stream = std::pin::pin!(stream);
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result
-            .map_err(|e| CdcError::Snapshot(format!("COPY stream error: {e}")))?;
+        let chunk =
+            chunk_result.map_err(|e| CdcError::Snapshot(format!("COPY stream error: {e}")))?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
         while let Some(newline_pos) = buffer.find('\n') {
             let line = &buffer[..newline_pos];
             if !line.is_empty() {
-                let event = parse_copy_line(line, &columns, &table_id, snapshot_lsn, timestamp_us, &pk_columns);
+                let event = parse_copy_line(
+                    line,
+                    &columns,
+                    &table_id,
+                    snapshot_lsn,
+                    timestamp_us,
+                    &pk_columns,
+                );
                 sender
                     .send(SourceEvent::Change(event))
                     .await
@@ -129,7 +142,9 @@ async fn snapshot_table(
                 // Emit periodic checkpoints to trigger pipeline flushes
                 if row_count.is_multiple_of(SNAPSHOT_CHECKPOINT_INTERVAL) {
                     sender
-                        .send(SourceEvent::Checkpoint { offset: snapshot_lsn.to_string() })
+                        .send(SourceEvent::Checkpoint {
+                            offset: snapshot_lsn.to_string(),
+                        })
                         .await
                         .map_err(|e| CdcError::Snapshot(format!("send checkpoint: {e}")))?;
                 }
@@ -139,7 +154,14 @@ async fn snapshot_table(
     }
 
     if !buffer.is_empty() {
-        let event = parse_copy_line(&buffer, &columns, &table_id, snapshot_lsn, timestamp_us, &pk_columns);
+        let event = parse_copy_line(
+            &buffer,
+            &columns,
+            &table_id,
+            snapshot_lsn,
+            timestamp_us,
+            &pk_columns,
+        );
         sender
             .send(SourceEvent::Change(event))
             .await
@@ -370,7 +392,14 @@ mod tests {
             ("id".to_string(), 23u32),   // int4
             ("name".to_string(), 25u32), // text
         ];
-        let event = parse_copy_line("42\tAlice", &columns, &table_id, Lsn(100), 1000, &["id".into()]);
+        let event = parse_copy_line(
+            "42\tAlice",
+            &columns,
+            &table_id,
+            Lsn(100),
+            1000,
+            &["id".into()],
+        );
         assert_eq!(event.op, ChangeOp::Snapshot);
         assert!(event.old.is_none());
         assert_eq!(event.lsn, Lsn(100));
@@ -389,10 +418,7 @@ mod tests {
             name: "t".into(),
             oid: 1,
         };
-        let columns = vec![
-            ("id".to_string(), 23u32),
-            ("email".to_string(), 25u32),
-        ];
+        let columns = vec![("id".to_string(), 23u32), ("email".to_string(), 25u32)];
         let event = parse_copy_line("1\t\\N", &columns, &table_id, Lsn(0), 0, &[]);
         let row = event.new.unwrap();
         assert_eq!(row.get("id"), Some(&ColumnValue::Int(1)));
@@ -407,10 +433,13 @@ mod tests {
             oid: 1,
         };
         let columns = vec![("bio".to_string(), 25u32)]; // text
-        // COPY text with escaped newline
+                                                        // COPY text with escaped newline
         let event = parse_copy_line("hello\\nworld", &columns, &table_id, Lsn(0), 0, &[]);
         let row = event.new.unwrap();
-        assert_eq!(row.get("bio"), Some(&ColumnValue::Text("hello\nworld".into())));
+        assert_eq!(
+            row.get("bio"),
+            Some(&ColumnValue::Text("hello\nworld".into()))
+        );
     }
 
     #[test]

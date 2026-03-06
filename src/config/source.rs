@@ -73,7 +73,10 @@ mod tests {
         });
         match config.to_connection_config() {
             SourceConnectionConfig::Mysql { url } => {
-                assert_eq!(url, "mysql://cdc_user:cdc_password@mysql.example.com:3306/demo");
+                assert_eq!(
+                    url,
+                    "mysql://cdc_user:cdc_password@mysql.example.com:3306/demo"
+                );
             }
             _ => panic!("expected Mysql variant"),
         }

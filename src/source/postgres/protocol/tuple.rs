@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn test_parse_null_column() {
         let data: Vec<u8> = vec![
-            0, 1, // 1 column
+            0, 1,    // 1 column
             b'n', // NULL
         ];
         let tuple = parse_tuple_data(&mut data.as_slice()).unwrap();
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn test_parse_unchanged_toast() {
         let data: Vec<u8> = vec![
-            0, 1, // 1 column
+            0, 1,    // 1 column
             b'u', // unchanged TOAST
         ];
         let tuple = parse_tuple_data(&mut data.as_slice()).unwrap();
@@ -100,7 +100,7 @@ mod tests {
     fn test_parse_text_column() {
         let text = "hello";
         let mut data: Vec<u8> = vec![
-            0, 1,  // 1 column
+            0, 1,    // 1 column
             b't', // text
         ];
         data.extend_from_slice(&(text.len() as i32).to_be_bytes());
@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn test_parse_empty_text_column() {
         let mut data: Vec<u8> = vec![
-            0, 1,  // 1 column
+            0, 1,    // 1 column
             b't', // text
             0, 0, 0, 0, // length 0
         ];
@@ -128,7 +128,7 @@ mod tests {
         let text1 = "42";
         let text2 = "Alice";
         let mut data: Vec<u8> = vec![
-            0, 4, // 4 columns
+            0, 4,    // 4 columns
             b't', // text
         ];
         data.extend_from_slice(&(text1.len() as i32).to_be_bytes());
@@ -166,9 +166,9 @@ mod tests {
     #[test]
     fn test_parse_truncated_text_length() {
         let data: Vec<u8> = vec![
-            0, 1,  // 1 column
+            0, 1,    // 1 column
             b't', // text
-            0, 0,  // only 2 bytes of the 4-byte length
+            0, 0, // only 2 bytes of the 4-byte length
         ];
         assert!(parse_tuple_data(&mut data.as_slice()).is_err());
     }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn test_parse_truncated_text_data() {
         let data: Vec<u8> = vec![
-            0, 1,  // 1 column
+            0, 1,    // 1 column
             b't', // text
             0, 0, 0, 5, // length 5
             b'h', b'i', // only 2 of 5 bytes
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn test_parse_unknown_tag() {
         let data: Vec<u8> = vec![
-            0, 1,  // 1 column
+            0, 1,    // 1 column
             b'x', // unknown tag
         ];
         assert!(parse_tuple_data(&mut data.as_slice()).is_err());

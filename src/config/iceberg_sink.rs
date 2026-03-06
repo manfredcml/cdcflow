@@ -79,7 +79,6 @@ mod tests {
                         assert_eq!(rest.warehouse.as_deref(), Some("s3://my-bucket/warehouse"));
                     }
                 }
-
             }
             _ => panic!("expected Iceberg sink config"),
         }
@@ -118,7 +117,6 @@ mod tests {
                         assert_eq!(rest.timeout_secs, 30);
                     }
                 }
-
             }
             _ => panic!("expected Iceberg sink config"),
         }
@@ -160,7 +158,9 @@ mod tests {
                         Some("admin")
                     );
                     assert_eq!(
-                        rest.properties.get("s3.secret-access-key").map(String::as_str),
+                        rest.properties
+                            .get("s3.secret-access-key")
+                            .map(String::as_str),
                         Some("password")
                     );
                 }

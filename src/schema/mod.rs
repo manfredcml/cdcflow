@@ -136,7 +136,10 @@ mod tests {
             (ColumnValue::Float(OrderedFloat(1.5)), CanonicalType::Double),
             (ColumnValue::Text("hello".into()), CanonicalType::Text),
             (ColumnValue::Bytes(vec![1, 2]), CanonicalType::Binary),
-            (ColumnValue::Timestamp("2024-01-01".into()), CanonicalType::Timestamp),
+            (
+                ColumnValue::Timestamp("2024-01-01".into()),
+                CanonicalType::Timestamp,
+            ),
             (ColumnValue::Date("2024-01-01".into()), CanonicalType::Date),
             (ColumnValue::Time("10:00:00".into()), CanonicalType::Time),
             (ColumnValue::UnchangedToast, CanonicalType::Text),
@@ -167,5 +170,4 @@ mod tests {
         let names = build_cdc_column_names(&[]);
         assert_eq!(names.len(), 7); // Just metadata
     }
-
 }
