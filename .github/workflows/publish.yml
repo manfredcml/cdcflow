@@ -1,0 +1,26 @@
+name: Publish
+on:
+  push:
+    tags: ["v*"]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify tag matches crate version
+        run: |
+          CRATE_VERSION="v$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[0].version')"
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ "$CRATE_VERSION" != "$TAG" ]; then
+            echo "Tag $TAG does not match crate version $CRATE_VERSION"
+            exit 1
+          fi
+      - name: Publish
+        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
