@@ -32,10 +32,8 @@ impl PipelineMetrics {
         self.events_total.fetch_add(event_count, Ordering::Relaxed);
         self.batches_total.fetch_add(1, Ordering::Relaxed);
         self.last_batch_size.store(event_count, Ordering::Relaxed);
-        self.last_flush_at.store(
-            chrono::Utc::now().timestamp(),
-            Ordering::Relaxed,
-        );
+        self.last_flush_at
+            .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
     }
 
     pub fn record_error(&self) {
@@ -120,5 +118,4 @@ mod tests {
         let snap = m.snapshot();
         assert!(snap.last_flush_at > 0);
     }
-
 }

@@ -83,7 +83,17 @@ pub async fn perform_snapshot(
         let bools = get_boolean_columns(&mut conn, schema, name).await?;
         let pk_cols = get_table_pk_columns(&mut conn, schema, name).await?;
         let col_types = get_column_types(&mut conn, schema, name).await?;
-        let cols = snapshot_table(&mut conn, schema, name, binlog_position, &bools, &col_types, &pk_cols, sender).await?;
+        let cols = snapshot_table(
+            &mut conn,
+            schema,
+            name,
+            binlog_position,
+            &bools,
+            &col_types,
+            &pk_cols,
+            sender,
+        )
+        .await?;
         let key = (schema.to_string(), name.to_string());
         column_names.insert(key.clone(), cols);
         boolean_columns.insert(key.clone(), bools);
@@ -115,6 +125,7 @@ pub async fn perform_snapshot(
 }
 
 /// Snapshot a single table via SELECT *.
+#[allow(clippy::too_many_arguments)]
 async fn snapshot_table(
     conn: &mut Conn,
     schema: &str,
@@ -134,7 +145,12 @@ async fn snapshot_table(
         .map_err(|e| CdcError::Mysql(format!("SELECT from {schema}.{table}: {e}")))?;
 
     if rows.is_empty() {
-        tracing::info!(schema, table, row_count = 0, "table snapshot complete (empty)");
+        tracing::info!(
+            schema,
+            table,
+            row_count = 0,
+            "table snapshot complete (empty)"
+        );
         // Get column names from an empty result — query information_schema
         let col_names = get_table_columns(conn, schema, table).await?;
         return Ok(col_names);
@@ -198,11 +214,18 @@ pub async fn get_table_columns(conn: &mut Conn, schema: &str, table: &str) -> Re
         .await
         .map_err(|e| CdcError::Mysql(format!("get columns for {schema}.{table}: {e}")))?;
 
-    Ok(rows.iter().map(|r| r.get::<String, _>(0).unwrap_or_default()).collect())
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>(0).unwrap_or_default())
+        .collect())
 }
 
 /// Get primary key column names for a table, in ordinal position order.
-pub async fn get_table_pk_columns(conn: &mut Conn, schema: &str, table: &str) -> Result<Vec<String>> {
+pub async fn get_table_pk_columns(
+    conn: &mut Conn,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<String>> {
     let rows: Vec<MysqlRow> = conn
         .exec(
             "SELECT column_name FROM information_schema.key_column_usage \
@@ -213,11 +236,18 @@ pub async fn get_table_pk_columns(conn: &mut Conn, schema: &str, table: &str) ->
         .await
         .map_err(|e| CdcError::Mysql(format!("get PK columns for {schema}.{table}: {e}")))?;
 
-    Ok(rows.iter().map(|r| r.get::<String, _>(0).unwrap_or_default()).collect())
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>(0).unwrap_or_default())
+        .collect())
 }
 
 /// Get column names that are TINYINT(1) (MySQL's boolean type).
-pub async fn get_boolean_columns(conn: &mut Conn, schema: &str, table: &str) -> Result<HashSet<String>> {
+pub async fn get_boolean_columns(
+    conn: &mut Conn,
+    schema: &str,
+    table: &str,
+) -> Result<HashSet<String>> {
     let rows: Vec<MysqlRow> = conn
         .exec(
             "SELECT column_name FROM information_schema.columns \
@@ -228,7 +258,10 @@ pub async fn get_boolean_columns(conn: &mut Conn, schema: &str, table: &str) -> 
         .await
         .map_err(|e| CdcError::Mysql(format!("get boolean columns for {schema}.{table}: {e}")))?;
 
-    Ok(rows.iter().map(|r| r.get::<String, _>(0).unwrap_or_default()).collect())
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>(0).unwrap_or_default())
+        .collect())
 }
 
 /// Get column types from information_schema for type-aware Bytes parsing.
@@ -274,21 +307,19 @@ pub fn parse_mysql_bytes_with_type(bytes: &[u8], column_type: &str) -> ColumnVal
         .unwrap_or(column_type)
         .trim()
         .to_lowercase();
-    let base_type = base_type.trim_end_matches(" unsigned").trim_end_matches(" zerofill");
+    let base_type = base_type
+        .trim_end_matches(" unsigned")
+        .trim_end_matches(" zerofill");
 
     match base_type {
-        "int" | "integer" | "mediumint" | "bigint" | "smallint" | "tinyint" => {
-            text.trim().parse::<i64>().map_or_else(
-                |_| ColumnValue::Text(text.into_owned()),
-                ColumnValue::Int,
-            )
-        }
-        "float" | "double" | "real" => {
-            text.trim().parse::<f64>().map_or_else(
-                |_| ColumnValue::Text(text.into_owned()),
-                ColumnValue::float,
-            )
-        }
+        "int" | "integer" | "mediumint" | "bigint" | "smallint" | "tinyint" => text
+            .trim()
+            .parse::<i64>()
+            .map_or_else(|_| ColumnValue::Text(text.into_owned()), ColumnValue::Int),
+        "float" | "double" | "real" => text
+            .trim()
+            .parse::<f64>()
+            .map_or_else(|_| ColumnValue::Text(text.into_owned()), ColumnValue::float),
         // decimal/numeric: keep as Text — downstream handles string-based decimals
         _ => ColumnValue::Text(text.into_owned()),
     }
@@ -337,9 +368,13 @@ fn mysql_row_to_cdc_row(
                     if h == 0 && mi == 0 && s == 0 && us == 0 {
                         ColumnValue::Date(format!("{y:04}-{mo:02}-{d:02}"))
                     } else if us == 0 {
-                        ColumnValue::Timestamp(format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}"))
+                        ColumnValue::Timestamp(format!(
+                            "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}"
+                        ))
                     } else {
-                        ColumnValue::Timestamp(format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}"))
+                        ColumnValue::Timestamp(format!(
+                            "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{us:06}"
+                        ))
                     }
                 }
                 Some(mysql_async::Value::Time(neg, days, h, mi, s, us)) => {
@@ -357,21 +392,17 @@ fn mysql_row_to_cdc_row(
         .collect()
 }
 
-
-
 /// Get the current binlog filename and position.
 async fn get_binlog_position(conn: &mut Conn) -> Result<(String, u64)> {
     // Try `SHOW BINARY LOG STATUS` first (MySQL 8.4+), fallback to `SHOW MASTER STATUS`
-    let result: std::result::Result<Vec<MysqlRow>, _> =
-        conn.query("SHOW BINARY LOG STATUS").await;
+    let result: std::result::Result<Vec<MysqlRow>, _> = conn.query("SHOW BINARY LOG STATUS").await;
 
     let rows = match result {
         Ok(rows) => rows,
-        Err(_) => {
-            conn.query("SHOW MASTER STATUS")
-                .await
-                .map_err(|e| CdcError::Mysql(format!("SHOW MASTER STATUS failed: {e}")))?
-        }
+        Err(_) => conn
+            .query("SHOW MASTER STATUS")
+            .await
+            .map_err(|e| CdcError::Mysql(format!("SHOW MASTER STATUS failed: {e}")))?,
     };
 
     if rows.is_empty() {
@@ -434,15 +465,15 @@ mod tests {
 
     #[test]
     fn test_parse_mysql_bytes_float_types() {
-        let cases = vec![
-            ("float", "1.23"),
-            ("double", "4.567"),
-            ("real", "99.9"),
-        ];
+        let cases = vec![("float", "1.23"), ("double", "4.567"), ("real", "99.9")];
         for (col_type, input) in cases {
             let result = parse_mysql_bytes_with_type(input.as_bytes(), col_type);
             let expected_val: f64 = input.parse().unwrap();
-            assert_eq!(result, ColumnValue::float(expected_val), "type={col_type} input={input}");
+            assert_eq!(
+                result,
+                ColumnValue::float(expected_val),
+                "type={col_type} input={input}"
+            );
         }
     }
 

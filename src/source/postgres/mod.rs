@@ -1,9 +1,9 @@
 pub mod event_converter;
 pub mod protocol;
+pub mod publication;
 pub mod relation_cache;
 pub mod replication_client;
 pub mod replication_stream;
-pub mod publication;
 pub mod slot;
 pub mod snapshot;
 
@@ -180,7 +180,10 @@ impl<O: OffsetStore + Sync> Source for PostgresSource<O> {
                 }
             }
         }
-        tracing::info!(tables = pk_cache.len(), "populated primary key cache from pg_index");
+        tracing::info!(
+            tables = pk_cache.len(),
+            "populated primary key cache from pg_index"
+        );
 
         // Phase 2: Stream changes
         tracing::info!(%start_lsn, "starting WAL streaming");

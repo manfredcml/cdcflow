@@ -13,10 +13,9 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 
-use cdcflow::admin::sqlite::SqliteAdminStore;
 use cdcflow::admin::routes::admin_router;
+use cdcflow::admin::sqlite::SqliteAdminStore;
 use cdcflow::admin::AdminState;
-
 
 /// Helper: start an admin server on an ephemeral port and return its base URL.
 async fn start_admin_server(shutdown: CancellationToken) -> String {

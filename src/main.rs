@@ -21,7 +21,10 @@ use cdcflow::worker_http::registration::AdminClient;
 use cdcflow::worker_http::WorkerHttpServer;
 
 #[derive(Parser, Debug)]
-#[command(name = "cdcflow", about = "Change Data Capture agent for PostgreSQL and MySQL")]
+#[command(
+    name = "cdcflow",
+    about = "Change Data Capture agent for PostgreSQL and MySQL"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -180,12 +183,13 @@ async fn main() {
     // For all other commands, log to stdout only.
     let is_admin_start = matches!(
         cli.command,
-        Commands::Admin(AdminArgs { action: AdminAction::Start(_) })
+        Commands::Admin(AdminArgs {
+            action: AdminAction::Start(_)
+        })
     );
 
     if is_admin_start {
-        let log_file = std::fs::File::create(new_log_path())
-            .expect("failed to create log file");
+        let log_file = std::fs::File::create(new_log_path()).expect("failed to create log file");
 
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
@@ -265,9 +269,9 @@ async fn run_command(args: RunArgs, shutdown: CancellationToken) -> Result<(), C
         let job = job_client.get_job(job_name).await?;
         (config, Some(client), Some(job.id))
     } else {
-        let config_path = args.config.ok_or_else(|| {
-            CdcError::Config("--config is required with --standalone".into())
-        })?;
+        let config_path = args
+            .config
+            .ok_or_else(|| CdcError::Config("--config is required with --standalone".into()))?;
         let config = load_config(&config_path)?;
         tracing::info!("config loaded from file");
         (config, None, None)
@@ -364,10 +368,8 @@ async fn admin_start(args: AdminStartArgs, shutdown: CancellationToken) -> Resul
     // Also handle SIGTERM for `admin stop`
     let shutdown_term = shutdown.clone();
     tokio::spawn(async move {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        )
-        .expect("failed to register SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
         sigterm.recv().await;
         tracing::info!("received SIGTERM, shutting down");
         shutdown_term.cancel();
@@ -468,7 +470,11 @@ fn admin_logs_list(logs_dir: &std::path::Path) -> Result<(), CdcError> {
     }
 
     // Sort by modification time (newest last)
-    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH));
+    entries.sort_by_key(|e| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
 
     let latest_name = entries.last().map(|e| e.file_name());
 
@@ -583,8 +589,10 @@ async fn job_command(args: JobArgs, shutdown: CancellationToken) -> Result<(), C
             client.delete_job(&name).await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({"status": "deleted", "name": name}))
-                    .map_err(|e| CdcError::Config(format!("json error: {e}")))?
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"status": "deleted", "name": name})
+                )
+                .map_err(|e| CdcError::Config(format!("json error: {e}")))?
             );
         }
     }
@@ -603,14 +611,20 @@ async fn run_with_sink<S: Sink>(
         SourceConfig::Postgres(pg_config) => match offset_config {
             OffsetConfig::Sqlite { path, key } => {
                 let os = SqliteOffsetStore::new(&path, &key)?;
-                let mut pipeline = Pipeline::new(PostgresSource::new(pg_config, os.clone()), sink, os);
-                if let Some(m) = metrics { pipeline = pipeline.with_metrics(m); }
+                let mut pipeline =
+                    Pipeline::new(PostgresSource::new(pg_config, os.clone()), sink, os);
+                if let Some(m) = metrics {
+                    pipeline = pipeline.with_metrics(m);
+                }
                 pipeline.run(shutdown).await
             }
             OffsetConfig::Memory => {
                 let os = MemoryOffsetStore::new();
-                let mut pipeline = Pipeline::new(PostgresSource::new(pg_config, os.clone()), sink, os);
-                if let Some(m) = metrics { pipeline = pipeline.with_metrics(m); }
+                let mut pipeline =
+                    Pipeline::new(PostgresSource::new(pg_config, os.clone()), sink, os);
+                if let Some(m) = metrics {
+                    pipeline = pipeline.with_metrics(m);
+                }
                 pipeline.run(shutdown).await
             }
         },
@@ -618,20 +632,28 @@ async fn run_with_sink<S: Sink>(
             OffsetConfig::Sqlite { path, key } => {
                 let os = SqliteOffsetStore::new(&path, &key)?;
                 let mut pipeline = Pipeline::new(MySqlSource::new(my_config, os.clone()), sink, os);
-                if let Some(m) = metrics { pipeline = pipeline.with_metrics(m); }
+                if let Some(m) = metrics {
+                    pipeline = pipeline.with_metrics(m);
+                }
                 pipeline.run(shutdown).await
             }
             OffsetConfig::Memory => {
                 let os = MemoryOffsetStore::new();
                 let mut pipeline = Pipeline::new(MySqlSource::new(my_config, os.clone()), sink, os);
-                if let Some(m) = metrics { pipeline = pipeline.with_metrics(m); }
+                if let Some(m) = metrics {
+                    pipeline = pipeline.with_metrics(m);
+                }
                 pipeline.run(shutdown).await
             }
         },
     }
 }
 
-async fn run_pipeline(config: Config, shutdown: CancellationToken, metrics: Option<std::sync::Arc<PipelineMetrics>>) -> Result<(), CdcError> {
+async fn run_pipeline(
+    config: Config,
+    shutdown: CancellationToken,
+    metrics: Option<std::sync::Arc<PipelineMetrics>>,
+) -> Result<(), CdcError> {
     if config.mode == SinkMode::Replication {
         match &config.sink {
             SinkConfig::Iceberg(_) | SinkConfig::Postgres(_) => {} // OK
@@ -648,7 +670,14 @@ async fn run_pipeline(config: Config, shutdown: CancellationToken, metrics: Opti
 
     match config.sink {
         SinkConfig::Stdout => {
-            run_with_sink(config.source, config.offset, StdoutSink::new(), shutdown, metrics).await
+            run_with_sink(
+                config.source,
+                config.offset,
+                StdoutSink::new(),
+                shutdown,
+                metrics,
+            )
+            .await
         }
         SinkConfig::Iceberg(iceberg_config) => {
             let sink = IcebergSink::new(iceberg_config, config.mode, source_conn).await?;
@@ -685,9 +714,7 @@ mod tests {
 
     #[test]
     fn test_cli_job_run_standalone() {
-        let args = parse_run_args(&[
-            "cdcflow", "job", "run", "--standalone", "-c", "config.json",
-        ]);
+        let args = parse_run_args(&["cdcflow", "job", "run", "--standalone", "-c", "config.json"]);
         assert!(args.standalone);
         assert_eq!(args.config.unwrap().to_str().unwrap(), "config.json");
         assert!(args.admin_url.is_none());
@@ -699,10 +726,15 @@ mod tests {
     #[test]
     fn test_cli_job_run_managed() {
         let args = parse_run_args(&[
-            "cdcflow", "job", "run",
-            "--admin-url", "http://admin:8080",
-            "--job", "my-job",
-            "--http-port", "9090",
+            "cdcflow",
+            "job",
+            "run",
+            "--admin-url",
+            "http://admin:8080",
+            "--job",
+            "my-job",
+            "--http-port",
+            "9090",
         ]);
         assert!(!args.standalone);
         assert_eq!(args.admin_url.as_deref(), Some("http://admin:8080"));
@@ -714,38 +746,33 @@ mod tests {
     #[test]
     fn test_cli_job_run_standalone_conflicts_with_admin_url() {
         let result = Cli::try_parse_from([
-            "cdcflow", "job", "run",
+            "cdcflow",
+            "job",
+            "run",
             "--standalone",
-            "--admin-url", "http://admin:8080",
+            "--admin-url",
+            "http://admin:8080",
         ]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_cli_job_run_standalone_conflicts_with_job() {
-        let result = Cli::try_parse_from([
-            "cdcflow", "job", "run",
-            "--standalone",
-            "--job", "my-job",
-        ]);
+        let result =
+            Cli::try_parse_from(["cdcflow", "job", "run", "--standalone", "--job", "my-job"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_cli_job_run_admin_url_requires_job() {
-        let result = Cli::try_parse_from([
-            "cdcflow", "job", "run",
-            "--admin-url", "http://admin:8080",
-        ]);
+        let result =
+            Cli::try_parse_from(["cdcflow", "job", "run", "--admin-url", "http://admin:8080"]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_cli_job_run_job_requires_admin_url() {
-        let result = Cli::try_parse_from([
-            "cdcflow", "job", "run",
-            "--job", "my-job",
-        ]);
+        let result = Cli::try_parse_from(["cdcflow", "job", "run", "--job", "my-job"]);
         assert!(result.is_err());
     }
 
@@ -764,7 +791,13 @@ mod tests {
     #[test]
     fn test_cli_admin_start_with_options() {
         let args = parse_admin_start_args(&[
-            "cdcflow", "admin", "start", "--port", "9090", "--db-path", "test.db",
+            "cdcflow",
+            "admin",
+            "start",
+            "--port",
+            "9090",
+            "--db-path",
+            "test.db",
         ]);
         assert_eq!(args.port, 9090);
         assert_eq!(args.db_path, "test.db");
@@ -803,7 +836,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = find_latest_log(dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no log files found"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no log files found"));
     }
 
     #[test]
@@ -832,11 +868,20 @@ mod tests {
     fn test_new_log_path_format() {
         let path = new_log_path();
         let name = path.file_name().unwrap().to_string_lossy();
-        assert!(name.starts_with("admin-"), "log name should start with 'admin-': {name}");
-        assert!(name.ends_with(".log"), "log name should end with '.log': {name}");
+        assert!(
+            name.starts_with("admin-"),
+            "log name should start with 'admin-': {name}"
+        );
+        assert!(
+            name.ends_with(".log"),
+            "log name should end with '.log': {name}"
+        );
         // Should contain a timestamp with sub-second precision (dot separator)
         let stem = name.trim_start_matches("admin-").trim_end_matches(".log");
-        assert!(stem.contains('.'), "timestamp should have sub-second precision: {stem}");
+        assert!(
+            stem.contains('.'),
+            "timestamp should have sub-second precision: {stem}"
+        );
     }
 
     #[test]
@@ -865,9 +910,7 @@ mod tests {
 
     #[test]
     fn test_cli_admin_logs_list_conflicts_with_file() {
-        let result = Cli::try_parse_from([
-            "cdcflow", "admin", "logs", "--list", "some-file.log",
-        ]);
+        let result = Cli::try_parse_from(["cdcflow", "admin", "logs", "--list", "some-file.log"]);
         assert!(result.is_err());
     }
 
@@ -931,19 +974,32 @@ mod tests {
     #[test]
     fn test_cli_job_create() {
         let cli = Cli::parse_from([
-            "cdcflow", "job",
+            "cdcflow",
+            "job",
             "create",
-            "--admin-url", "http://localhost:8090",
-            "--name", "pg-stdout",
-            "--config", "example/configs/pg-to-stdout.json",
-            "--description", "test job",
+            "--admin-url",
+            "http://localhost:8090",
+            "--name",
+            "pg-stdout",
+            "--config",
+            "example/configs/pg-to-stdout.json",
+            "--description",
+            "test job",
         ]);
         match cli.command {
             Commands::Job(args) => match args.action {
-                JobAction::Create { admin_url, name, config, description } => {
+                JobAction::Create {
+                    admin_url,
+                    name,
+                    config,
+                    description,
+                } => {
                     assert_eq!(admin_url, "http://localhost:8090");
                     assert_eq!(name, "pg-stdout");
-                    assert_eq!(config.to_str().unwrap(), "example/configs/pg-to-stdout.json");
+                    assert_eq!(
+                        config.to_str().unwrap(),
+                        "example/configs/pg-to-stdout.json"
+                    );
                     assert_eq!(description, "test job");
                 }
                 _ => panic!("expected Create action"),
@@ -955,11 +1011,15 @@ mod tests {
     #[test]
     fn test_cli_job_create_default_description() {
         let cli = Cli::parse_from([
-            "cdcflow", "job",
+            "cdcflow",
+            "job",
             "create",
-            "--admin-url", "http://localhost:8090",
-            "--name", "test",
-            "--config", "config.json",
+            "--admin-url",
+            "http://localhost:8090",
+            "--name",
+            "test",
+            "--config",
+            "config.json",
         ]);
         match cli.command {
             Commands::Job(args) => match args.action {
@@ -1065,8 +1125,6 @@ mod tests {
         let shutdown = CancellationToken::new();
         let result = run_pipeline(config, shutdown, None).await;
         assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("replication mode"),
-        );
+        assert!(result.unwrap_err().to_string().contains("replication mode"),);
     }
 }

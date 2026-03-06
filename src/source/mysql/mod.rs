@@ -35,8 +35,8 @@ impl<O: OffsetStore> MySqlSource<O> {
     /// Build a mysql_async connection pool from config.
     fn build_pool(&self) -> Pool {
         let url = connection_url(&self.config);
-        let opts = Opts::from_url(&url)
-            .unwrap_or_else(|e| panic!("invalid MySQL connection URL: {e}"));
+        let opts =
+            Opts::from_url(&url).unwrap_or_else(|e| panic!("invalid MySQL connection URL: {e}"));
         Pool::new(opts)
     }
 }
@@ -67,56 +67,62 @@ impl<O: OffsetStore + Sync> Source for MySqlSource<O> {
         // Phase 1: Determine start position (snapshot or resume)
         let saved_offset = self.offset_store.load().await?;
 
-        let (binlog_file, binlog_pos, column_names, boolean_columns, pk_columns, column_types) = match saved_offset {
-            Some(offset_str) => {
-                let (file, pos) = parse_mysql_offset(&offset_str)?;
-                tracing::info!(file, pos, "resuming from saved offset, skipping snapshot");
+        let (binlog_file, binlog_pos, column_names, boolean_columns, pk_columns, column_types) =
+            match saved_offset {
+                Some(offset_str) => {
+                    let (file, pos) = parse_mysql_offset(&offset_str)?;
+                    tracing::info!(file, pos, "resuming from saved offset, skipping snapshot");
 
-                // Load column names, boolean column info, primary keys, and column
-                // types from information_schema so binlog events have real column
-                // names, correct boolean typing, PK metadata, and type-aware Bytes
-                // parsing.
-                let mut conn = pool.get_conn().await.map_err(|e| {
-                    CdcError::Mysql(format!("failed to get connection for column metadata: {e}"))
-                })?;
-                let mut column_names = std::collections::HashMap::new();
-                let mut boolean_columns = std::collections::HashMap::new();
-                let mut pk_columns = std::collections::HashMap::new();
-                let mut column_types = std::collections::HashMap::new();
-                for table in &self.config.tables {
-                    let (schema, name) = snapshot::parse_table_name(table);
-                    let cols =
-                        snapshot::get_table_columns(&mut conn, schema, name).await?;
-                    let bools =
-                        snapshot::get_boolean_columns(&mut conn, schema, name).await?;
-                    let pks =
-                        snapshot::get_table_pk_columns(&mut conn, schema, name).await?;
-                    let types =
-                        snapshot::get_column_types(&mut conn, schema, name).await?;
-                    let key = (schema.to_string(), name.to_string());
-                    column_names.insert(key.clone(), cols);
-                    boolean_columns.insert(key.clone(), bools);
-                    pk_columns.insert(key.clone(), pks);
-                    column_types.insert(key, types);
+                    // Load column names, boolean column info, primary keys, and column
+                    // types from information_schema so binlog events have real column
+                    // names, correct boolean typing, PK metadata, and type-aware Bytes
+                    // parsing.
+                    let mut conn = pool.get_conn().await.map_err(|e| {
+                        CdcError::Mysql(format!(
+                            "failed to get connection for column metadata: {e}"
+                        ))
+                    })?;
+                    let mut column_names = std::collections::HashMap::new();
+                    let mut boolean_columns = std::collections::HashMap::new();
+                    let mut pk_columns = std::collections::HashMap::new();
+                    let mut column_types = std::collections::HashMap::new();
+                    for table in &self.config.tables {
+                        let (schema, name) = snapshot::parse_table_name(table);
+                        let cols = snapshot::get_table_columns(&mut conn, schema, name).await?;
+                        let bools = snapshot::get_boolean_columns(&mut conn, schema, name).await?;
+                        let pks = snapshot::get_table_pk_columns(&mut conn, schema, name).await?;
+                        let types = snapshot::get_column_types(&mut conn, schema, name).await?;
+                        let key = (schema.to_string(), name.to_string());
+                        column_names.insert(key.clone(), cols);
+                        boolean_columns.insert(key.clone(), bools);
+                        pk_columns.insert(key.clone(), pks);
+                        column_types.insert(key, types);
+                    }
+                    drop(conn);
+
+                    (
+                        file,
+                        pos,
+                        column_names,
+                        boolean_columns,
+                        pk_columns,
+                        column_types,
+                    )
                 }
-                drop(conn);
-
-                (file, pos, column_names, boolean_columns, pk_columns, column_types)
-            }
-            None => {
-                tracing::info!("no saved offset, performing initial snapshot");
-                let result =
-                    snapshot::perform_snapshot(&pool, &self.config.tables, &sender).await?;
-                (
-                    result.binlog_filename,
-                    result.binlog_position,
-                    result.column_names,
-                    result.boolean_columns,
-                    result.pk_columns,
-                    result.column_types,
-                )
-            }
-        };
+                None => {
+                    tracing::info!("no saved offset, performing initial snapshot");
+                    let result =
+                        snapshot::perform_snapshot(&pool, &self.config.tables, &sender).await?;
+                    (
+                        result.binlog_filename,
+                        result.binlog_position,
+                        result.column_names,
+                        result.boolean_columns,
+                        result.pk_columns,
+                        result.column_types,
+                    )
+                }
+            };
 
         if shutdown.is_cancelled() {
             drop(pool);
@@ -140,7 +146,13 @@ impl<O: OffsetStore + Sync> Source for MySqlSource<O> {
             .await
             .map_err(|e| CdcError::Mysql(format!("failed to start binlog stream: {e}")))?;
 
-        let converter = EventConverter::new(binlog_file, column_names, boolean_columns, pk_columns, column_types);
+        let converter = EventConverter::new(
+            binlog_file,
+            column_names,
+            boolean_columns,
+            pk_columns,
+            column_types,
+        );
         let mut runner = BinlogStreamRunner::new(converter, pool.clone());
         runner.run(&mut stream, &sender, &shutdown).await?;
 

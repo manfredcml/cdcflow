@@ -83,9 +83,7 @@ fn build_source_column(
     // For each row, find the column value by name
     let values: Vec<Option<&ColumnValue>> = rows
         .iter()
-        .map(|row| {
-            row.and_then(|r| r.get(col_name))
-        })
+        .map(|row| row.and_then(|r| r.get(col_name)))
         .collect();
 
     match data_type {
@@ -141,9 +139,7 @@ fn build_source_column(
                 .map(|v| match v {
                     Some(ColumnValue::Bool(b)) => Some(*b),
                     Some(ColumnValue::Int(n)) => Some(*n != 0),
-                    Some(ColumnValue::Text(s)) => {
-                        Some(s == "t" || s == "true" || s == "1")
-                    }
+                    Some(ColumnValue::Text(s)) => Some(s == "t" || s == "true" || s == "1"),
                     _ => None,
                 })
                 .collect();
@@ -208,9 +204,7 @@ fn build_source_column(
             let arr: Time64MicrosecondArray = values
                 .iter()
                 .map(|v| match v {
-                    Some(ColumnValue::Time(s)) | Some(ColumnValue::Text(s)) => {
-                        parse_time_us(s)
-                    }
+                    Some(ColumnValue::Time(s)) | Some(ColumnValue::Text(s)) => parse_time_us(s),
                     _ => None,
                 })
                 .collect();
@@ -314,7 +308,11 @@ pub fn events_to_flattened_cdc_batch(
     let new_rows: Vec<Option<&Row>> = events.iter().map(|e| e.new.as_ref()).collect();
     for i in 0..num_source {
         let field = &all_fields[num_metadata + i];
-        columns.push(build_source_column(field.name(), field.data_type(), &new_rows)?);
+        columns.push(build_source_column(
+            field.name(),
+            field.data_type(),
+            &new_rows,
+        )?);
     }
 
     // _old_ columns (from event.old)
@@ -323,7 +321,11 @@ pub fn events_to_flattened_cdc_batch(
         let field = &all_fields[num_metadata + num_source + i];
         // Strip _old_ prefix to look up the column name in the old row
         let source_col_name = field.name().strip_prefix("_old_").unwrap_or(field.name());
-        columns.push(build_source_column(source_col_name, field.data_type(), &old_rows)?);
+        columns.push(build_source_column(
+            source_col_name,
+            field.data_type(),
+            &old_rows,
+        )?);
     }
 
     RecordBatch::try_new(Arc::new(arrow_schema.clone()), columns)
@@ -352,10 +354,7 @@ pub fn events_to_replication_data_batch(
         return Ok(None);
     }
 
-    let rows: Vec<Option<&Row>> = data_events
-        .iter()
-        .map(|event| event.new.as_ref())
-        .collect();
+    let rows: Vec<Option<&Row>> = data_events.iter().map(|event| event.new.as_ref()).collect();
 
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(arrow_schema.fields().len());
     for field in arrow_schema.fields() {
@@ -492,10 +491,10 @@ fn parse_uuid_bytes(s: &str) -> Option<[u8; 16]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
-    use arrow_array::Array;
     use crate::event::{Lsn, TableId};
+    use arrow_array::Array;
     use arrow_schema::Field;
+    use std::collections::BTreeMap;
 
     /// Fixed 7-column CDC Arrow schema.
     fn test_cdc_arrow_schema() -> ArrowSchema {
@@ -544,20 +543,40 @@ mod tests {
         assert_eq!(batch.num_columns(), 7);
 
         // Check metadata columns
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "I");
 
-        let lsns = batch.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        let lsns = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(lsns.value(0), 100);
 
-        let timestamps = batch.column(2).as_any().downcast_ref::<Int64Array>().unwrap();
+        let timestamps = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(timestamps.value(0), 1_000_000);
 
-        let snapshots = batch.column(3).as_any().downcast_ref::<BooleanArray>().unwrap();
+        let snapshots = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
         assert!(!snapshots.value(0));
 
         // Check row_new is JSON with values and types
-        let row_new = batch.column(4).as_any().downcast_ref::<StringArray>().unwrap();
+        let row_new = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert!(!row_new.is_null(0));
         let parsed: serde_json::Value = serde_json::from_str(row_new.value(0)).unwrap();
         assert_eq!(parsed["values"]["id"], 1);
@@ -566,7 +585,11 @@ mod tests {
         assert_eq!(parsed["types"]["name"], "Text");
 
         // row_old should be null for inserts
-        let row_old = batch.column(5).as_any().downcast_ref::<StringArray>().unwrap();
+        let row_old = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert!(row_old.is_null(0));
     }
 
@@ -609,14 +632,26 @@ mod tests {
         let batch = events_to_record_batch(&events, &schema).unwrap();
         assert_eq!(batch.num_rows(), 3);
 
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "I");
         assert_eq!(ops.value(1), "U");
         assert_eq!(ops.value(2), "D");
 
         // Update has both new and old
-        let row_new = batch.column(4).as_any().downcast_ref::<StringArray>().unwrap();
-        let row_old = batch.column(5).as_any().downcast_ref::<StringArray>().unwrap();
+        let row_new = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let row_old = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
 
         assert!(!row_new.is_null(1));
         assert!(!row_old.is_null(1));
@@ -645,12 +680,24 @@ mod tests {
         let batch = events_to_record_batch(&events, &schema).unwrap();
         assert_eq!(batch.num_rows(), 1);
 
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "T");
 
         // Both row_new and row_old should be null for truncate
-        let row_new = batch.column(4).as_any().downcast_ref::<StringArray>().unwrap();
-        let row_old = batch.column(5).as_any().downcast_ref::<StringArray>().unwrap();
+        let row_new = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let row_old = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert!(row_new.is_null(0));
         assert!(row_old.is_null(0));
     }
@@ -683,10 +730,18 @@ mod tests {
 
         let batch = events_to_record_batch(&events, &schema).unwrap();
 
-        let snapshots = batch.column(3).as_any().downcast_ref::<BooleanArray>().unwrap();
+        let snapshots = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
         assert!(snapshots.value(0));
 
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "S");
     }
 
@@ -735,21 +790,49 @@ mod tests {
         assert_eq!(batch.num_columns(), 11); // 7 meta + 2 source + 2 old
 
         // Metadata
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "I");
-        let lsns = batch.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        let lsns = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(lsns.value(0), 100);
-        let snapshots = batch.column(3).as_any().downcast_ref::<BooleanArray>().unwrap();
+        let snapshots = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
         assert!(!snapshots.value(0));
-        let schemas = batch.column(4).as_any().downcast_ref::<StringArray>().unwrap();
+        let schemas = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(schemas.value(0), "public");
-        let tables_col = batch.column(5).as_any().downcast_ref::<StringArray>().unwrap();
+        let tables_col = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(tables_col.value(0), "users");
 
         // Source columns
-        let ids = batch.column(7).as_any().downcast_ref::<Int64Array>().unwrap();
+        let ids = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(ids.value(0), 1);
-        let names = batch.column(8).as_any().downcast_ref::<StringArray>().unwrap();
+        let names = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(names.value(0), "Alice");
 
         // Old columns should be null for inserts
@@ -779,19 +862,39 @@ mod tests {
 
         let batch = events_to_flattened_cdc_batch(&events, &schema).unwrap();
 
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "U");
 
         // New values
-        let ids = batch.column(7).as_any().downcast_ref::<Int64Array>().unwrap();
+        let ids = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(ids.value(0), 1);
-        let names = batch.column(8).as_any().downcast_ref::<StringArray>().unwrap();
+        let names = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(names.value(0), "Bob");
 
         // Old values
-        let old_ids = batch.column(9).as_any().downcast_ref::<Int64Array>().unwrap();
+        let old_ids = batch
+            .column(9)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(old_ids.value(0), 1);
-        let old_names = batch.column(10).as_any().downcast_ref::<StringArray>().unwrap();
+        let old_names = batch
+            .column(10)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(old_names.value(0), "Alice");
     }
 
@@ -814,7 +917,11 @@ mod tests {
 
         let batch = events_to_flattened_cdc_batch(&events, &schema).unwrap();
 
-        let ops = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        let ops = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(ops.value(0), "D");
 
         // New values should be null for deletes
@@ -822,9 +929,17 @@ mod tests {
         assert!(batch.column(8).is_null(0));
 
         // Old values present
-        let old_ids = batch.column(9).as_any().downcast_ref::<Int64Array>().unwrap();
+        let old_ids = batch
+            .column(9)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
         assert_eq!(old_ids.value(0), 1);
-        let old_names = batch.column(10).as_any().downcast_ref::<StringArray>().unwrap();
+        let old_names = batch
+            .column(10)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(old_names.value(0), "Alice");
     }
 
@@ -843,7 +958,11 @@ mod tests {
         let events = vec![make_insert_event(1, "Alice")]; // has pk_columns: ["id"]
         let batch = events_to_flattened_cdc_batch(&events, &schema).unwrap();
 
-        let pk = batch.column(6).as_any().downcast_ref::<StringArray>().unwrap();
+        let pk = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
         assert_eq!(pk.value(0), "[\"id\"]");
     }
 
@@ -870,7 +989,9 @@ mod tests {
             primary_key_columns: vec![],
         }];
 
-        let batch = events_to_replication_data_batch(&events, &schema).unwrap().unwrap();
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
         let decimals = batch
             .column(1)
             .as_any()
@@ -881,9 +1002,7 @@ mod tests {
 
     #[test]
     fn test_repl_decimal_column_from_float() {
-        let schema = ArrowSchema::new(vec![
-            Field::new("price", DataType::Decimal128(38, 2), true),
-        ]);
+        let schema = ArrowSchema::new(vec![Field::new("price", DataType::Decimal128(38, 2), true)]);
 
         let events = vec![CdcEvent {
             lsn: Lsn(100),
@@ -891,12 +1010,17 @@ mod tests {
             xid: 1,
             table: test_table_id(),
             op: ChangeOp::Insert,
-            new: Some(BTreeMap::from([("price".into(), ColumnValue::float(19.99))])),
+            new: Some(BTreeMap::from([(
+                "price".into(),
+                ColumnValue::float(19.99),
+            )])),
             old: None,
             primary_key_columns: vec![],
         }];
 
-        let batch = events_to_replication_data_batch(&events, &schema).unwrap().unwrap();
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
         let decimals = batch
             .column(0)
             .as_any()
@@ -907,9 +1031,11 @@ mod tests {
 
     #[test]
     fn test_repl_decimal_column_from_int() {
-        let schema = ArrowSchema::new(vec![
-            Field::new("amount", DataType::Decimal128(38, 2), true),
-        ]);
+        let schema = ArrowSchema::new(vec![Field::new(
+            "amount",
+            DataType::Decimal128(38, 2),
+            true,
+        )]);
 
         let events = vec![CdcEvent {
             lsn: Lsn(100),
@@ -922,7 +1048,9 @@ mod tests {
             primary_key_columns: vec![],
         }];
 
-        let batch = events_to_replication_data_batch(&events, &schema).unwrap().unwrap();
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
         let decimals = batch
             .column(0)
             .as_any()
@@ -950,9 +1078,11 @@ mod tests {
 
     #[test]
     fn test_repl_time_column() {
-        let schema = ArrowSchema::new(vec![
-            Field::new("event_time", DataType::Time64(TimeUnit::Microsecond), true),
-        ]);
+        let schema = ArrowSchema::new(vec![Field::new(
+            "event_time",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )]);
 
         let events = vec![CdcEvent {
             lsn: Lsn(100),
@@ -968,7 +1098,9 @@ mod tests {
             primary_key_columns: vec![],
         }];
 
-        let batch = events_to_replication_data_batch(&events, &schema).unwrap().unwrap();
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
         let times = batch
             .column(0)
             .as_any()
@@ -991,9 +1123,11 @@ mod tests {
 
     #[test]
     fn test_repl_uuid_column() {
-        let schema = ArrowSchema::new(vec![
-            Field::new("uuid", DataType::FixedSizeBinary(16), true),
-        ]);
+        let schema = ArrowSchema::new(vec![Field::new(
+            "uuid",
+            DataType::FixedSizeBinary(16),
+            true,
+        )]);
 
         let events = vec![CdcEvent {
             lsn: Lsn(100),
@@ -1009,7 +1143,9 @@ mod tests {
             primary_key_columns: vec![],
         }];
 
-        let batch = events_to_replication_data_batch(&events, &schema).unwrap().unwrap();
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
         let uuids = batch
             .column(0)
             .as_any()
@@ -1017,7 +1153,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             uuids.value(0),
-            &[0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00]
+            &[
+                0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+                0x00, 0x00
+            ]
         );
     }
 
@@ -1044,9 +1183,7 @@ mod tests {
 
     #[test]
     fn test_repl_binary_column() {
-        let schema = ArrowSchema::new(vec![
-            Field::new("data", DataType::LargeBinary, true),
-        ]);
+        let schema = ArrowSchema::new(vec![Field::new("data", DataType::LargeBinary, true)]);
 
         let events = vec![CdcEvent {
             lsn: Lsn(100),
@@ -1062,7 +1199,9 @@ mod tests {
             primary_key_columns: vec![],
         }];
 
-        let batch = events_to_replication_data_batch(&events, &schema).unwrap().unwrap();
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
         let bins = batch
             .column(0)
             .as_any()

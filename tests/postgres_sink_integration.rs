@@ -70,11 +70,7 @@ fn make_sink_config(host: &str, port: u16) -> PostgresSinkConfig {
     }
 }
 
-fn make_insert_event(
-    schema: &str,
-    table: &str,
-    columns: Vec<(&str, ColumnValue)>,
-) -> CdcEvent {
+fn make_insert_event(schema: &str, table: &str, columns: Vec<(&str, ColumnValue)>) -> CdcEvent {
     CdcEvent {
         lsn: Lsn(100),
         timestamp_us: 1_700_000_000_000_000,
@@ -85,7 +81,12 @@ fn make_insert_event(
             oid: 0,
         },
         op: ChangeOp::Insert,
-        new: Some(columns.into_iter().map(|(k, v)| (k.to_string(), v)).collect()),
+        new: Some(
+            columns
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        ),
         old: None,
         primary_key_columns: vec![],
     }
@@ -123,11 +124,7 @@ fn make_update_event(
     }
 }
 
-fn make_delete_event(
-    schema: &str,
-    table: &str,
-    old_columns: Vec<(&str, ColumnValue)>,
-) -> CdcEvent {
+fn make_delete_event(schema: &str, table: &str, old_columns: Vec<(&str, ColumnValue)>) -> CdcEvent {
     CdcEvent {
         lsn: Lsn(300),
         timestamp_us: 1_700_000_000_000_002,
@@ -176,22 +173,31 @@ async fn test_cdc_mode_insert_batch() {
     let (_container, host, port) = start_postgres().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Pre-create the CDC table with 3-column JSONB schema.
+    // Create source table (for column discovery via source_connection).
     let client = connect_client(&host, port).await;
     client
+        .execute("CREATE SCHEMA IF NOT EXISTS src", &[])
+        .await
+        .unwrap();
+    client
         .execute(
-            "CREATE TABLE \"public\".\"users\" (metadata JSONB NOT NULL, \"new\" JSONB, \"old\" JSONB)",
+            "CREATE TABLE src.users (id integer NOT NULL, name text)",
             &[],
         )
         .await
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None).await.unwrap();
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
+        .await
+        .unwrap();
 
     let events = vec![
         make_insert_event(
-            "public",
+            "src",
             "users",
             vec![
                 ("id", ColumnValue::Int(1)),
@@ -199,7 +205,7 @@ async fn test_cdc_mode_insert_batch() {
             ],
         ),
         make_insert_event(
-            "public",
+            "src",
             "users",
             vec![
                 ("id", ColumnValue::Int(2)),
@@ -211,10 +217,10 @@ async fn test_cdc_mode_insert_batch() {
     sink.write_batch(&events).await.unwrap();
     sink.flush().await.unwrap();
 
-    // Verify via direct query — metadata and row are JSONB columns.
+    // Verify via direct query — flattened CDC columns.
     let rows = client
         .query(
-            "SELECT metadata, \"new\", \"old\" FROM \"public\".\"users\" ORDER BY (metadata->>'lsn')::bigint",
+            "SELECT \"_cdc_op\", \"_cdc_lsn\", \"_cdc_snapshot\", \"id\", \"name\", \"_old_id\", \"_old_name\" FROM \"public\".\"users\" ORDER BY \"_cdc_lsn\"",
             &[],
         )
         .await
@@ -222,19 +228,19 @@ async fn test_cdc_mode_insert_batch() {
 
     assert_eq!(rows.len(), 2);
 
-    let metadata: serde_json::Value = rows[0].get("metadata");
-    assert_eq!(metadata["op"], "I");
-    assert_eq!(metadata["lsn"], 100);
-    assert_eq!(metadata["snapshot"], false);
+    let op: &str = rows[0].get("_cdc_op");
+    assert_eq!(op, "I");
+    let lsn: i64 = rows[0].get("_cdc_lsn");
+    assert_eq!(lsn, 100);
+    let snapshot: bool = rows[0].get("_cdc_snapshot");
+    assert!(!snapshot);
 
-    let new_json: serde_json::Value = rows[0].get("new");
-    assert_eq!(new_json["values"]["id"], 1);
-    assert_eq!(new_json["values"]["name"], "Alice");
-    assert_eq!(new_json["types"]["id"], "Int");
-    assert_eq!(new_json["types"]["name"], "Text");
-
-    let old_json: Option<serde_json::Value> = rows[0].get("old");
-    assert!(old_json.is_none());
+    let id: Option<i32> = rows[0].get("id");
+    assert_eq!(id, Some(1));
+    let name: Option<&str> = rows[0].get("name");
+    assert_eq!(name, Some("Alice"));
+    let old_id: Option<i32> = rows[0].get("_old_id");
+    assert!(old_id.is_none());
 }
 
 #[tokio::test]
@@ -243,30 +249,28 @@ async fn test_cdc_mode_mixed_operations() {
     let (_container, host, port) = start_postgres().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Pre-create the CDC table with 3-column JSONB schema.
+    // Create source table for column discovery.
     let client = connect_client(&host, port).await;
     client
-        .execute(
-            "CREATE TABLE \"public\".\"orders\" (metadata JSONB NOT NULL, \"new\" JSONB, \"old\" JSONB)",
-            &[],
-        )
+        .execute("CREATE SCHEMA IF NOT EXISTS src", &[])
+        .await
+        .unwrap();
+    client
+        .execute("CREATE TABLE src.orders (id integer NOT NULL)", &[])
         .await
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None).await.unwrap();
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
+        .await
+        .unwrap();
 
     let events = vec![
-        make_insert_event(
-            "public",
-            "orders",
-            vec![("id", ColumnValue::Int(1))],
-        ),
-        make_delete_event(
-            "public",
-            "orders",
-            vec![("id", ColumnValue::Int(1))],
-        ),
+        make_insert_event("src", "orders", vec![("id", ColumnValue::Int(1))]),
+        make_delete_event("src", "orders", vec![("id", ColumnValue::Int(1))]),
     ];
 
     sink.write_batch(&events).await.unwrap();
@@ -274,17 +278,17 @@ async fn test_cdc_mode_mixed_operations() {
 
     let rows = client
         .query(
-            "SELECT metadata FROM \"public\".\"orders\" ORDER BY (metadata->>'lsn')::bigint",
+            "SELECT \"_cdc_op\" FROM \"public\".\"orders\" ORDER BY \"_cdc_lsn\"",
             &[],
         )
         .await
         .unwrap();
 
     assert_eq!(rows.len(), 2);
-    let meta0: serde_json::Value = rows[0].get("metadata");
-    let meta1: serde_json::Value = rows[1].get("metadata");
-    assert_eq!(meta0["op"], "I");
-    assert_eq!(meta1["op"], "D");
+    let op0: &str = rows[0].get("_cdc_op");
+    let op1: &str = rows[1].get("_cdc_op");
+    assert_eq!(op0, "I");
+    assert_eq!(op1, "D");
 }
 
 #[tokio::test]
@@ -293,24 +297,26 @@ async fn test_cdc_mode_snapshot_flag() {
     let (_container, host, port) = start_postgres().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Pre-create the CDC table with 3-column JSONB schema.
+    // Create source table for column discovery.
     let client = connect_client(&host, port).await;
     client
-        .execute(
-            "CREATE TABLE \"public\".\"snap_table\" (metadata JSONB NOT NULL, \"new\" JSONB, \"old\" JSONB)",
-            &[],
-        )
+        .execute("CREATE SCHEMA IF NOT EXISTS src", &[])
+        .await
+        .unwrap();
+    client
+        .execute("CREATE TABLE src.snap_table (id integer NOT NULL)", &[])
         .await
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None).await.unwrap();
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
+        .await
+        .unwrap();
 
-    let mut event = make_insert_event(
-        "public",
-        "snap_table",
-        vec![("id", ColumnValue::Int(1))],
-    );
+    let mut event = make_insert_event("src", "snap_table", vec![("id", ColumnValue::Int(1))]);
     event.op = ChangeOp::Snapshot;
 
     sink.write_batch(&[event]).await.unwrap();
@@ -318,15 +324,16 @@ async fn test_cdc_mode_snapshot_flag() {
 
     let row = client
         .query_one(
-            "SELECT metadata FROM \"public\".\"snap_table\"",
+            "SELECT \"_cdc_op\", \"_cdc_snapshot\" FROM \"public\".\"snap_table\"",
             &[],
         )
         .await
         .unwrap();
 
-    let metadata: serde_json::Value = row.get("metadata");
-    assert_eq!(metadata["op"], "S");
-    assert_eq!(metadata["snapshot"], true);
+    let op: &str = row.get("_cdc_op");
+    assert_eq!(op, "S");
+    let snapshot: bool = row.get("_cdc_snapshot");
+    assert!(snapshot);
 }
 
 // ─────────────────────────────────────────────────
@@ -355,7 +362,9 @@ async fn test_replication_mode_upsert() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Replication, None).await.unwrap();
+    let mut sink = PostgresSink::new(config, SinkMode::Replication, None)
+        .await
+        .unwrap();
 
     // Insert a row
     let insert_event = make_insert_event(
@@ -423,7 +432,9 @@ async fn test_replication_mode_delete() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Replication, None).await.unwrap();
+    let mut sink = PostgresSink::new(config, SinkMode::Replication, None)
+        .await
+        .unwrap();
 
     // Insert two rows
     let events = vec![
@@ -456,11 +467,7 @@ async fn test_replication_mode_delete() {
     assert_eq!(count, 2);
 
     // Delete one row
-    let delete_event = make_delete_event(
-        "public",
-        "products",
-        vec![("id", ColumnValue::Int(1))],
-    );
+    let delete_event = make_delete_event("public", "products", vec![("id", ColumnValue::Int(1))]);
     sink.write_batch(&[delete_event]).await.unwrap();
     sink.flush().await.unwrap();
 
@@ -500,12 +507,28 @@ async fn test_replication_mode_truncate() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Replication, None).await.unwrap();
+    let mut sink = PostgresSink::new(config, SinkMode::Replication, None)
+        .await
+        .unwrap();
 
     // Insert rows
     let events = vec![
-        make_insert_event("public", "logs", vec![("id", ColumnValue::Int(1)), ("msg", ColumnValue::Text("a".into()))]),
-        make_insert_event("public", "logs", vec![("id", ColumnValue::Int(2)), ("msg", ColumnValue::Text("b".into()))]),
+        make_insert_event(
+            "public",
+            "logs",
+            vec![
+                ("id", ColumnValue::Int(1)),
+                ("msg", ColumnValue::Text("a".into())),
+            ],
+        ),
+        make_insert_event(
+            "public",
+            "logs",
+            vec![
+                ("id", ColumnValue::Int(2)),
+                ("msg", ColumnValue::Text("b".into())),
+            ],
+        ),
     ];
     sink.write_batch(&events).await.unwrap();
     sink.flush().await.unwrap();
@@ -539,26 +562,34 @@ async fn test_cdc_mode_multi_table_batch() {
     let (_container, host, port) = start_postgres().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Pre-create both CDC tables with 3-column JSONB schema.
+    // Create source tables for column discovery.
     let client = connect_client(&host, port).await;
-    let cdc_ddl = "(metadata JSONB NOT NULL, \"new\" JSONB, \"old\" JSONB)";
     client
-        .execute(&format!("CREATE TABLE \"public\".\"table_a\" {cdc_ddl}"), &[])
+        .execute("CREATE SCHEMA IF NOT EXISTS src", &[])
         .await
         .unwrap();
     client
-        .execute(&format!("CREATE TABLE \"public\".\"table_b\" {cdc_ddl}"), &[])
+        .execute("CREATE TABLE src.table_a (id integer NOT NULL)", &[])
+        .await
+        .unwrap();
+    client
+        .execute("CREATE TABLE src.table_b (id integer NOT NULL)", &[])
         .await
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None).await.unwrap();
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
+        .await
+        .unwrap();
 
     // Single batch with events for two different tables
     let events = vec![
-        make_insert_event("public", "table_a", vec![("id", ColumnValue::Int(1))]),
-        make_insert_event("public", "table_b", vec![("id", ColumnValue::Int(2))]),
-        make_insert_event("public", "table_a", vec![("id", ColumnValue::Int(3))]),
+        make_insert_event("src", "table_a", vec![("id", ColumnValue::Int(1))]),
+        make_insert_event("src", "table_b", vec![("id", ColumnValue::Int(2))]),
+        make_insert_event("src", "table_a", vec![("id", ColumnValue::Int(3))]),
     ];
     sink.write_batch(&events).await.unwrap();
     sink.flush().await.unwrap();
@@ -599,7 +630,9 @@ async fn test_replication_mode_composite_pk() {
         .unwrap();
 
     let config = make_sink_config(&host, port);
-    let mut sink = PostgresSink::new(config, SinkMode::Replication, None).await.unwrap();
+    let mut sink = PostgresSink::new(config, SinkMode::Replication, None)
+        .await
+        .unwrap();
 
     // Insert rows with composite PK
     let events = vec![
@@ -675,22 +708,28 @@ async fn test_cdc_mode_table_prefix() {
     let (_container, host, port) = start_postgres().await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Pre-create the CDC table with the prefixed name and 3-column JSONB schema.
+    // Create source table for column discovery.
     let client = connect_client(&host, port).await;
     client
-        .execute(
-            "CREATE TABLE \"public\".\"cdc_events\" (metadata JSONB NOT NULL, \"new\" JSONB, \"old\" JSONB)",
-            &[],
-        )
+        .execute("CREATE SCHEMA IF NOT EXISTS src", &[])
+        .await
+        .unwrap();
+    client
+        .execute("CREATE TABLE src.events (id integer NOT NULL)", &[])
         .await
         .unwrap();
 
     let mut config = make_sink_config(&host, port);
     config.table_prefix = "cdc_".into();
-    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None).await.unwrap();
+    let source_conn = SourceConnectionConfig::Postgres {
+        url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
+    };
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, Some(source_conn))
+        .await
+        .unwrap();
 
     let events = vec![make_insert_event(
-        "public",
+        "src",
         "events",
         vec![("id", ColumnValue::Int(1))],
     )];
@@ -705,10 +744,10 @@ async fn test_cdc_mode_table_prefix() {
         .get(0);
     assert_eq!(count, 1);
 
-    // Original table name should not exist
+    // Original table name should not exist in public schema
     let exists = client
         .query_one(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'events')",
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'events')",
             &[],
         )
         .await
@@ -741,7 +780,9 @@ async fn test_replication_mode_schema_evolution() {
     let source_conn = SourceConnectionConfig::Postgres {
         url: format!("postgres://postgres:postgres@{host}:{port}/postgres"),
     };
-    let mut sink = PostgresSink::new(config, SinkMode::Replication, Some(source_conn)).await.unwrap();
+    let mut sink = PostgresSink::new(config, SinkMode::Replication, Some(source_conn))
+        .await
+        .unwrap();
 
     // 1. Insert with (id, name) — works as before.
     let e1 = make_insert_event(

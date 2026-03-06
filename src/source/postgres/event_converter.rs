@@ -164,9 +164,10 @@ impl EventConverter {
     }
 
     fn make_table_id(&self, rel_id: u32) -> Result<TableId> {
-        let (schema, name) = self.cache.table_info(rel_id).ok_or_else(|| {
-            CdcError::Protocol(format!("no cached relation for OID {rel_id}"))
-        })?;
+        let (schema, name) = self
+            .cache
+            .table_info(rel_id)
+            .ok_or_else(|| CdcError::Protocol(format!("no cached relation for OID {rel_id}")))?;
         Ok(TableId {
             schema: schema.to_string(),
             name: name.to_string(),
@@ -265,7 +266,10 @@ mod tests {
         let result = convert_one(&mut converter, make_begin_msg(42, 0x100, 1_000_000));
         assert!(matches!(result, ConvertResult::Begin(42)));
 
-        let result = convert_one(&mut converter, make_relation_msg(1, "users", &["id", "name"]));
+        let result = convert_one(
+            &mut converter,
+            make_relation_msg(1, "users", &["id", "name"]),
+        );
         assert!(matches!(result, ConvertResult::Skip));
 
         let result = convert_one(&mut converter, make_insert_msg(1, &["1", "Alice"]));
@@ -501,7 +505,10 @@ mod tests {
             .convert(make_relation_msg(1, "users", &["id", "name", "email"]))
             .unwrap();
 
-        match convert_one(&mut converter, make_insert_msg(1, &["2", "Bob", "bob@example.com"])) {
+        match convert_one(
+            &mut converter,
+            make_insert_msg(1, &["2", "Bob", "bob@example.com"]),
+        ) {
             ConvertResult::Event(e) => {
                 assert_eq!(e.op, ChangeOp::Insert);
                 let new = e.new.as_ref().unwrap();
@@ -574,9 +581,10 @@ mod tests {
     #[test]
     fn test_actual_pk_columns_from_cache() {
         // pk_cache entry should override WAL flags
-        let pk_cache = HashMap::from([
-            (("public".to_string(), "users".to_string()), vec!["id".to_string()]),
-        ]);
+        let pk_cache = HashMap::from([(
+            ("public".to_string(), "users".to_string()),
+            vec!["id".to_string()],
+        )]);
         let mut converter = EventConverter::new(pk_cache);
 
         converter.convert(make_begin_msg(1, 0x100, 0)).unwrap();
@@ -589,15 +597,33 @@ mod tests {
                     name: "users".into(),
                     replica_identity: b'f',
                     columns: vec![
-                        ColumnDef { flags: 1, name: "id".into(), type_oid: 23, type_modifier: -1 },
-                        ColumnDef { flags: 1, name: "name".into(), type_oid: 25, type_modifier: -1 },
-                        ColumnDef { flags: 1, name: "email".into(), type_oid: 25, type_modifier: -1 },
+                        ColumnDef {
+                            flags: 1,
+                            name: "id".into(),
+                            type_oid: 23,
+                            type_modifier: -1,
+                        },
+                        ColumnDef {
+                            flags: 1,
+                            name: "name".into(),
+                            type_oid: 25,
+                            type_modifier: -1,
+                        },
+                        ColumnDef {
+                            flags: 1,
+                            name: "email".into(),
+                            type_oid: 25,
+                            type_modifier: -1,
+                        },
                     ],
                 },
             ))
             .unwrap();
 
-        match convert_one(&mut converter, make_insert_msg(1, &["1", "Alice", "a@b.com"])) {
+        match convert_one(
+            &mut converter,
+            make_insert_msg(1, &["1", "Alice", "a@b.com"]),
+        ) {
             ConvertResult::Event(e) => {
                 // pk_cache says only "id" is a PK, not all three columns
                 assert_eq!(e.primary_key_columns, vec!["id"]);
@@ -621,8 +647,18 @@ mod tests {
                     name: "orders".into(),
                     replica_identity: b'd',
                     columns: vec![
-                        ColumnDef { flags: 1, name: "id".into(), type_oid: 23, type_modifier: -1 },
-                        ColumnDef { flags: 0, name: "amount".into(), type_oid: 23, type_modifier: -1 },
+                        ColumnDef {
+                            flags: 1,
+                            name: "id".into(),
+                            type_oid: 23,
+                            type_modifier: -1,
+                        },
+                        ColumnDef {
+                            flags: 0,
+                            name: "amount".into(),
+                            type_oid: 23,
+                            type_modifier: -1,
+                        },
                     ],
                 },
             ))
@@ -636,5 +672,4 @@ mod tests {
             _ => panic!("expected Event"),
         }
     }
-
 }

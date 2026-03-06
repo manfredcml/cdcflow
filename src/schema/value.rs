@@ -19,9 +19,7 @@ pub fn column_value_to_string(value: Option<&ColumnValue>) -> Option<String> {
             }
         }
         Some(ColumnValue::Text(s)) => Some(s.clone()),
-        Some(ColumnValue::Bytes(b)) => {
-            Some(b.iter().map(|byte| format!("{:02x}", byte)).collect())
-        }
+        Some(ColumnValue::Bytes(b)) => Some(b.iter().map(|byte| format!("{:02x}", byte)).collect()),
         Some(ColumnValue::Timestamp(s)) => Some(s.clone()),
         Some(ColumnValue::Date(s)) => Some(s.clone()),
         Some(ColumnValue::Time(s)) => Some(s.clone()),
@@ -137,8 +135,8 @@ pub fn event_to_json(event: &CdcEvent) -> serde_json::Value {
         "primary_key_columns": event.primary_key_columns,
     });
 
-    let row_new = event.new.as_ref().map(|r| row_to_typed_json(r));
-    let row_old = event.old.as_ref().map(|r| row_to_typed_json(r));
+    let row_new = event.new.as_ref().map(row_to_typed_json);
+    let row_old = event.old.as_ref().map(row_to_typed_json);
 
     json!({
         "metadata": metadata,
@@ -184,7 +182,10 @@ mod tests {
         );
 
         let text_val = ColumnValue::Text("hello".into());
-        assert_eq!(column_value_to_string(Some(&text_val)), Some("hello".into()));
+        assert_eq!(
+            column_value_to_string(Some(&text_val)),
+            Some("hello".into())
+        );
 
         let ts_val = ColumnValue::Timestamp("2024-01-01T00:00:00".into());
         assert_eq!(
@@ -219,8 +220,7 @@ mod tests {
 
     #[test]
     fn test_column_value_to_string_float_infinity() {
-        let result =
-            column_value_to_string(Some(&ColumnValue::Float(OrderedFloat(f64::INFINITY))));
+        let result = column_value_to_string(Some(&ColumnValue::Float(OrderedFloat(f64::INFINITY))));
         assert_eq!(result, None);
     }
 

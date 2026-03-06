@@ -62,7 +62,10 @@ mod tests {
                 oid: 16384,
             },
             op: ChangeOp::Insert,
-            new: Some(BTreeMap::from([("id".into(), ColumnValue::Text(id.into()))])),
+            new: Some(BTreeMap::from([(
+                "id".into(),
+                ColumnValue::Text(id.into()),
+            )])),
             old: None,
             primary_key_columns: vec!["id".into()],
         }

@@ -13,6 +13,44 @@ pub enum SourceConfig {
     Mysql(MySqlSourceConfig),
 }
 
+impl SourceConfig {
+    /// Build a [`super::SourceConnectionConfig`] from the source's connection fields.
+    ///
+    /// This lets the pipeline derive the schema-inference connection from the
+    /// already-configured source, so users don't have to duplicate it in the
+    /// sink config.
+    pub fn to_connection_config(&self) -> super::SourceConnectionConfig {
+        match self {
+            SourceConfig::Postgres(pg) => super::SourceConnectionConfig::Postgres {
+                url: format!(
+                    "postgres://{}{}@{}:{}/{}",
+                    pg.user,
+                    pg.password
+                        .as_deref()
+                        .map(|p| format!(":{p}"))
+                        .unwrap_or_default(),
+                    pg.host,
+                    pg.port,
+                    pg.database,
+                ),
+            },
+            SourceConfig::Mysql(my) => super::SourceConnectionConfig::Mysql {
+                url: format!(
+                    "mysql://{}{}@{}:{}/{}",
+                    my.user,
+                    my.password
+                        .as_deref()
+                        .map(|p| format!(":{p}"))
+                        .unwrap_or_default(),
+                    my.host,
+                    my.port,
+                    my.database,
+                ),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,7 +111,10 @@ mod tests {
         });
         match config.to_connection_config() {
             SourceConnectionConfig::Mysql { url } => {
-                assert_eq!(url, "mysql://cdc_user:cdc_password@mysql.example.com:3306/demo");
+                assert_eq!(
+                    url,
+                    "mysql://cdc_user:cdc_password@mysql.example.com:3306/demo"
+                );
             }
             _ => panic!("expected Mysql variant"),
         }
@@ -95,44 +136,6 @@ mod tests {
                 assert_eq!(url, "mysql://root@localhost:3307/app");
             }
             _ => panic!("expected Mysql variant"),
-        }
-    }
-}
-
-impl SourceConfig {
-    /// Build a [`super::SourceConnectionConfig`] from the source's connection fields.
-    ///
-    /// This lets the pipeline derive the schema-inference connection from the
-    /// already-configured source, so users don't have to duplicate it in the
-    /// sink config.
-    pub fn to_connection_config(&self) -> super::SourceConnectionConfig {
-        match self {
-            SourceConfig::Postgres(pg) => super::SourceConnectionConfig::Postgres {
-                url: format!(
-                    "postgres://{}{}@{}:{}/{}",
-                    pg.user,
-                    pg.password
-                        .as_deref()
-                        .map(|p| format!(":{p}"))
-                        .unwrap_or_default(),
-                    pg.host,
-                    pg.port,
-                    pg.database,
-                ),
-            },
-            SourceConfig::Mysql(my) => super::SourceConnectionConfig::Mysql {
-                url: format!(
-                    "mysql://{}{}@{}:{}/{}",
-                    my.user,
-                    my.password
-                        .as_deref()
-                        .map(|p| format!(":{p}"))
-                        .unwrap_or_default(),
-                    my.host,
-                    my.port,
-                    my.database,
-                ),
-            },
         }
     }
 }

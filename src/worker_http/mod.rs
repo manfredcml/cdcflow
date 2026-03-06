@@ -22,18 +22,26 @@ pub struct WorkerHttpServer {
 
 impl WorkerHttpServer {
     /// Bind to the given port (0 = OS-assigned ephemeral port).
-    pub async fn bind(port: u16, metrics: Arc<PipelineMetrics>, shutdown: CancellationToken) -> Result<Self> {
+    pub async fn bind(
+        port: u16,
+        metrics: Arc<PipelineMetrics>,
+        shutdown: CancellationToken,
+    ) -> Result<Self> {
         let addr: SocketAddr = ([0, 0, 0, 0], port).into();
         let listener = TcpListener::bind(addr)
             .await
             .map_err(|e| CdcError::Http(format!("failed to bind {addr}: {e}")))?;
-        let actual_addr = listener.local_addr()
+        let actual_addr = listener
+            .local_addr()
             .map_err(|e| CdcError::Http(format!("failed to get local addr: {e}")))?;
         // Drop listener — we'll re-bind in start(). This is just for port resolution.
         drop(listener);
 
         let state = WorkerState { metrics, shutdown };
-        Ok(Self { addr: actual_addr, state })
+        Ok(Self {
+            addr: actual_addr,
+            state,
+        })
     }
 
     /// The bound address (useful when port was 0).
@@ -64,4 +72,3 @@ impl WorkerHttpServer {
         Ok(())
     }
 }
-

@@ -238,21 +238,14 @@ mod tests {
             ),
             (
                 "character varying(255)",
-                CanonicalType::VarString {
-                    length: Some(255),
-                },
+                CanonicalType::VarString { length: Some(255) },
             ),
-            (
-                "varchar(50)",
-                CanonicalType::VarString { length: Some(50) },
-            ),
+            ("varchar(50)", CanonicalType::VarString { length: Some(50) }),
             ("char", CanonicalType::FixedString { length: None }),
             ("character", CanonicalType::FixedString { length: None }),
             (
                 "character(10)",
-                CanonicalType::FixedString {
-                    length: Some(10),
-                },
+                CanonicalType::FixedString { length: Some(10) },
             ),
         ];
         for (input, expected) in cases {
@@ -429,17 +422,10 @@ mod tests {
         let cases = vec![
             (
                 "varchar(255)",
-                CanonicalType::VarString {
-                    length: Some(255),
-                },
+                CanonicalType::VarString { length: Some(255) },
             ),
             ("varchar", CanonicalType::VarString { length: None }),
-            (
-                "char(10)",
-                CanonicalType::FixedString {
-                    length: Some(10),
-                },
-            ),
+            ("char(10)", CanonicalType::FixedString { length: Some(10) }),
             ("char", CanonicalType::FixedString { length: None }),
             ("text", CanonicalType::Text),
             ("tinytext", CanonicalType::Text),
@@ -521,9 +507,7 @@ mod tests {
     fn test_mysql_case_insensitive() {
         assert_eq!(
             parse_source_type(SourceDialect::Mysql, "VARCHAR(100)"),
-            CanonicalType::VarString {
-                length: Some(100)
-            }
+            CanonicalType::VarString { length: Some(100) }
         );
         assert_eq!(
             parse_source_type(SourceDialect::Mysql, "INT"),
@@ -538,5 +522,4 @@ mod tests {
             CanonicalType::Boolean
         );
     }
-
 }

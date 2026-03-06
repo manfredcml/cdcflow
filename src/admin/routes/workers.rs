@@ -23,7 +23,16 @@ pub async fn register_worker(
     Json(req): Json<RegisterRequest>,
 ) -> impl IntoResponse {
     let db = state.db.lock().await;
-    match db.register_worker(&req.worker_id, &req.job_id, &req.address, &req.hostname, req.pid).await {
+    match db
+        .register_worker(
+            &req.worker_id,
+            &req.job_id,
+            &req.address,
+            &req.hostname,
+            req.pid,
+        )
+        .await
+    {
         Ok(worker) => (StatusCode::OK, Json(serde_json::json!(worker))).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -46,7 +55,10 @@ pub async fn heartbeat_worker(
             .into_response();
     }
 
-    if let Err(e) = db.insert_metrics(&req.worker_id, &req.metrics, "running").await {
+    if let Err(e) = db
+        .insert_metrics(&req.worker_id, &req.metrics, "running")
+        .await
+    {
         tracing::warn!("failed to store metrics: {e}");
     }
 
@@ -92,7 +104,11 @@ pub async fn stop_worker(
         Ok(resp) if resp.status().is_success() => {
             let db = _state.db.lock().await;
             let _ = db.deregister_worker(&worker_id).await;
-            (StatusCode::OK, Json(serde_json::json!({"status": "stop sent"}))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "stop sent"})),
+            )
+                .into_response()
         }
         Ok(resp) => (
             StatusCode::BAD_GATEWAY,
@@ -112,11 +128,11 @@ mod tests {
     use super::*;
     use crate::admin::sqlite::SqliteAdminStore;
     use crate::admin::store::CreateJobRequest;
-    use std::sync::Arc;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::{get, post};
     use axum::Router;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     fn test_state() -> AdminState {
@@ -149,7 +165,9 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            db.register_worker("w1", &job.id, "addr", "h", 1).await.unwrap();
+            db.register_worker("w1", &job.id, "addr", "h", 1)
+                .await
+                .unwrap();
         }
 
         let app = test_router(state.clone());
@@ -182,5 +200,4 @@ mod tests {
         let latest = db.get_latest_metrics("w1").await.unwrap().unwrap();
         assert_eq!(latest.events_total, 50);
     }
-
 }

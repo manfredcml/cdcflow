@@ -46,7 +46,11 @@ fn generate_snapshot_id(table: &Table) -> i64 {
     let generate = || -> i64 {
         let (lhs, rhs) = Uuid::new_v4().as_u64_pair();
         let id = (lhs ^ rhs) as i64;
-        if id < 0 { -id } else { id }
+        if id < 0 {
+            -id
+        } else {
+            id
+        }
     };
     let mut id = generate();
     while table.metadata().snapshots().any(|s| s.snapshot_id() == id) {
@@ -245,14 +249,8 @@ pub async fn commit_truncate(
 
     let summary = build_truncate_summary();
 
-    let manifest_list_path = write_manifest_list(
-        table,
-        snapshot_id,
-        &commit_uuid,
-        sequence_number,
-        vec![],
-    )
-    .await?;
+    let manifest_list_path =
+        write_manifest_list(table, snapshot_id, &commit_uuid, sequence_number, vec![]).await?;
 
     let commit_ts = chrono::Utc::now().timestamp_millis();
     let snapshot = Snapshot::builder()
@@ -317,11 +315,7 @@ pub async fn commit_truncate(
 
     let status = response.status();
     if status.is_success() {
-        tracing::info!(
-            table = table_name,
-            snapshot_id,
-            "truncate commit succeeded"
-        );
+        tracing::info!(table = table_name, snapshot_id, "truncate commit succeeded");
         Ok(())
     } else {
         let body = response
@@ -407,7 +401,10 @@ pub async fn commit_row_delta(
     }
 
     let existing_manifests = load_existing_manifests(table).await?;
-    let all_manifests: Vec<_> = new_manifests.into_iter().chain(existing_manifests).collect();
+    let all_manifests: Vec<_> = new_manifests
+        .into_iter()
+        .chain(existing_manifests)
+        .collect();
 
     let manifest_list_path = write_manifest_list(
         table,
@@ -429,8 +426,7 @@ pub async fn commit_row_delta(
         .with_schema_id(table.metadata().current_schema_id())
         .build();
 
-    let table_ident =
-        TableIdent::new(namespace.clone(), table_name.to_string());
+    let table_ident = TableIdent::new(namespace.clone(), table_name.to_string());
 
     let updates = vec![
         TableUpdate::AddSnapshot { snapshot },
@@ -563,7 +559,10 @@ mod tests {
         let summary = build_truncate_summary();
         assert_eq!(summary.operation, Operation::Delete);
         assert_eq!(
-            summary.additional_properties.get("added-data-files").unwrap(),
+            summary
+                .additional_properties
+                .get("added-data-files")
+                .unwrap(),
             "0"
         );
         assert_eq!(
@@ -585,5 +584,4 @@ mod tests {
             "0"
         );
     }
-
 }

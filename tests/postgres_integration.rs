@@ -174,9 +174,7 @@ async fn test_full_pipeline_snapshot_and_stream() {
     let pipeline = Pipeline::new(source, sink, offset_store.clone());
 
     // Run pipeline in background
-    let pipeline_handle = tokio::spawn(async move {
-        pipeline.run(shutdown_clone).await
-    });
+    let pipeline_handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
 
     // Wait for snapshot to complete
     let snapshot_complete = timeout(Duration::from_secs(15), async {
@@ -228,10 +226,7 @@ async fn test_full_pipeline_snapshot_and_stream() {
     })
     .await;
 
-    assert!(
-        stream_received.is_ok(),
-        "stream event not received in time"
-    );
+    assert!(stream_received.is_ok(), "stream event not received in time");
 
     // Verify streamed insert
     {
@@ -281,9 +276,7 @@ async fn test_update_and_delete_events() {
     let shutdown_clone = shutdown.clone();
     let pipeline = Pipeline::new(source, sink, offset_store);
 
-    let pipeline_handle = tokio::spawn(async move {
-        pipeline.run(shutdown_clone).await
-    });
+    let pipeline_handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
 
     // Wait for snapshot
     timeout(Duration::from_secs(15), async {
@@ -398,9 +391,7 @@ async fn test_resume_from_offset() {
     let shutdown1_clone = shutdown1.clone();
     let pipeline1 = Pipeline::new(source1, sink1, offset_store.clone());
 
-    let handle1 = tokio::spawn(async move {
-        pipeline1.run(shutdown1_clone).await
-    });
+    let handle1 = tokio::spawn(async move { pipeline1.run(shutdown1_clone).await });
 
     // Wait for snapshot
     timeout(Duration::from_secs(15), async {
@@ -419,7 +410,10 @@ async fn test_resume_from_offset() {
     let _ = timeout(Duration::from_secs(5), handle1).await;
 
     let saved_offset = offset_store.current();
-    assert!(saved_offset.is_some(), "offset should be saved after first run");
+    assert!(
+        saved_offset.is_some(),
+        "offset should be saved after first run"
+    );
 
     // Insert more data while pipeline is stopped
     client
@@ -438,9 +432,7 @@ async fn test_resume_from_offset() {
     let shutdown2_clone = shutdown2.clone();
     let pipeline2 = Pipeline::new(source2, sink2, offset_store.clone());
 
-    let handle2 = tokio::spawn(async move {
-        pipeline2.run(shutdown2_clone).await
-    });
+    let handle2 = tokio::spawn(async move { pipeline2.run(shutdown2_clone).await });
 
     // Wait for the streamed insert (Bob)
     let resume_ok = timeout(Duration::from_secs(15), async {

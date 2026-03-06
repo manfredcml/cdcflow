@@ -104,16 +104,28 @@ impl EventConverter {
 
             let (op, old, new) = match rows_data {
                 RowsEventData::WriteRowsEvent(_) | RowsEventData::WriteRowsEventV1(_) => {
-                    let new = self.binlog_row_to_row(after.as_ref().unwrap(), &col_names, schema, table)?;
+                    let new =
+                        self.binlog_row_to_row(after.as_ref().unwrap(), &col_names, schema, table)?;
                     (ChangeOp::Insert, None, Some(new))
                 }
                 RowsEventData::UpdateRowsEvent(_) | RowsEventData::UpdateRowsEventV1(_) => {
-                    let old = self.binlog_row_to_row(before.as_ref().unwrap(), &col_names, schema, table)?;
-                    let new = self.binlog_row_to_row(after.as_ref().unwrap(), &col_names, schema, table)?;
+                    let old = self.binlog_row_to_row(
+                        before.as_ref().unwrap(),
+                        &col_names,
+                        schema,
+                        table,
+                    )?;
+                    let new =
+                        self.binlog_row_to_row(after.as_ref().unwrap(), &col_names, schema, table)?;
                     (ChangeOp::Update, Some(old), Some(new))
                 }
                 RowsEventData::DeleteRowsEvent(_) | RowsEventData::DeleteRowsEventV1(_) => {
-                    let old = self.binlog_row_to_row(before.as_ref().unwrap(), &col_names, schema, table)?;
+                    let old = self.binlog_row_to_row(
+                        before.as_ref().unwrap(),
+                        &col_names,
+                        schema,
+                        table,
+                    )?;
                     (ChangeOp::Delete, Some(old), None)
                 }
                 _ => {
@@ -236,7 +248,12 @@ impl EventConverter {
     }
 
     /// Update the column type cache for a table.
-    pub fn update_column_types(&mut self, schema: &str, table: &str, types: HashMap<String, String>) {
+    pub fn update_column_types(
+        &mut self,
+        schema: &str,
+        table: &str,
+        types: HashMap<String, String>,
+    ) {
         self.column_types
             .insert((schema.to_string(), table.to_string()), types);
     }
@@ -370,9 +387,7 @@ fn binlog_value_to_column_value(
         BinlogValue::Value(Value::Time(neg, days, h, mi, s, us)) => {
             ColumnValue::Time(format_mysql_time(*neg, *days, *h, *mi, *s, *us))
         }
-        BinlogValue::Jsonb(j) => {
-            ColumnValue::Text(format!("{j:?}"))
-        }
+        BinlogValue::Jsonb(j) => ColumnValue::Text(format!("{j:?}")),
         BinlogValue::JsonDiff(_) => {
             // Partial JSON updates — rare, treat as opaque
             ColumnValue::Text("[json_diff]".to_string())
@@ -413,7 +428,7 @@ fn strip_sql_comments(sql: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '/' && chars.peek() == Some(&'*') {
             chars.next(); // consume '*'
-            // Skip until closing "*/"
+                          // Skip until closing "*/"
             loop {
                 match chars.next() {
                     Some('*') if chars.peek() == Some(&'/') => {
@@ -503,7 +518,8 @@ mod tests {
 
     #[test]
     fn test_parse_truncate_query_with_backticks() {
-        let result = EventConverter::parse_truncate_query("TRUNCATE TABLE `mydb`.`users`", "default");
+        let result =
+            EventConverter::parse_truncate_query("TRUNCATE TABLE `mydb`.`users`", "default");
         assert_eq!(result, s("mydb", "users"));
     }
 
@@ -516,7 +532,9 @@ mod tests {
     #[test]
     fn test_parse_truncate_query_not_truncate() {
         assert!(EventConverter::parse_truncate_query("SELECT * FROM users", "mydb").is_none());
-        assert!(EventConverter::parse_truncate_query("INSERT INTO users VALUES (1)", "mydb").is_none());
+        assert!(
+            EventConverter::parse_truncate_query("INSERT INTO users VALUES (1)", "mydb").is_none()
+        );
         assert!(EventConverter::parse_truncate_query("DROP TABLE users", "mydb").is_none());
     }
 
@@ -549,7 +567,8 @@ mod tests {
         assert!(EventConverter::parse_truncate_query(
             "/* ApplicationName=RustRover */ BEGIN",
             "mydb"
-        ).is_none());
+        )
+        .is_none());
     }
 
     #[test]
@@ -560,14 +579,26 @@ mod tests {
             vec!["id".to_string(), "name".to_string(), "email".to_string()],
         );
 
-        let converter = EventConverter::new("binlog.000001".to_string(), cache, HashMap::new(), HashMap::new(), HashMap::new());
+        let converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            cache,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         let names = converter.get_column_names("mydb", "users", 3);
         assert_eq!(names, vec!["id", "name", "email"]);
     }
 
     #[test]
     fn test_get_column_names_fallback_positional() {
-        let converter = EventConverter::new("binlog.000001".to_string(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         let names = converter.get_column_names("mydb", "users", 3);
         assert_eq!(names, vec!["col_0", "col_1", "col_2"]);
     }
@@ -580,7 +611,13 @@ mod tests {
             vec!["id".to_string(), "name".to_string()], // 2 columns
         );
 
-        let converter = EventConverter::new("binlog.000001".to_string(), cache, HashMap::new(), HashMap::new(), HashMap::new());
+        let converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            cache,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         // Request 3 columns but cache has 2 — should fall back
         let names = converter.get_column_names("mydb", "users", 3);
         assert_eq!(names, vec!["col_0", "col_1", "col_2"]);
@@ -588,7 +625,13 @@ mod tests {
 
     #[test]
     fn test_cache_needs_refresh_no_entry() {
-        let converter = EventConverter::new("binlog.000001".to_string(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         assert!(converter.cache_needs_refresh("mydb", "users", 3));
     }
 
@@ -599,7 +642,13 @@ mod tests {
             ("mydb".to_string(), "users".to_string()),
             vec!["id".to_string(), "name".to_string()],
         );
-        let converter = EventConverter::new("binlog.000001".to_string(), cache, HashMap::new(), HashMap::new(), HashMap::new());
+        let converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            cache,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         // Cache has 2, event has 3 — needs refresh
         assert!(converter.cache_needs_refresh("mydb", "users", 3));
     }
@@ -611,13 +660,25 @@ mod tests {
             ("mydb".to_string(), "users".to_string()),
             vec!["id".to_string(), "name".to_string()],
         );
-        let converter = EventConverter::new("binlog.000001".to_string(), cache, HashMap::new(), HashMap::new(), HashMap::new());
+        let converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            cache,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         assert!(!converter.cache_needs_refresh("mydb", "users", 2));
     }
 
     #[test]
     fn test_update_column_cache() {
-        let mut converter = EventConverter::new("binlog.000001".to_string(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let mut converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         assert!(converter.cache_needs_refresh("mydb", "users", 3));
 
         converter.update_column_cache(
@@ -638,7 +699,13 @@ mod tests {
             ("mydb".to_string(), "users".to_string()),
             vec!["id".to_string(), "name".to_string()],
         );
-        let mut converter = EventConverter::new("binlog.000001".to_string(), cache, HashMap::new(), HashMap::new(), HashMap::new());
+        let mut converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            cache,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         assert!(converter.cache_needs_refresh("mydb", "users", 3));
 
@@ -656,7 +723,13 @@ mod tests {
 
     #[test]
     fn test_warn_no_metadata_once_sets_flag() {
-        let mut converter = EventConverter::new("binlog.000001".to_string(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let mut converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         assert!(!converter.warned_no_metadata);
 
         converter.warn_no_metadata_once("mydb", "users");
@@ -669,7 +742,13 @@ mod tests {
 
     #[test]
     fn test_update_boolean_cache() {
-        let mut converter = EventConverter::new("binlog.000001".to_string(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let mut converter = EventConverter::new(
+            "binlog.000001".to_string(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         let mut bools = HashSet::new();
         bools.insert("is_active".to_string());
@@ -685,7 +764,13 @@ mod tests {
 
     #[test]
     fn test_make_truncate_event_propagates_timestamp() {
-        let event = EventConverter::make_truncate_event("mydb", "users", 12345, 1_700_000_000_000_000, vec!["id".into()]);
+        let event = EventConverter::make_truncate_event(
+            "mydb",
+            "users",
+            12345,
+            1_700_000_000_000_000,
+            vec!["id".into()],
+        );
         assert_eq!(event.timestamp_us, 1_700_000_000_000_000);
         assert_eq!(event.lsn, Lsn(12345));
         assert_eq!(event.op, ChangeOp::Truncate);
@@ -708,32 +793,46 @@ mod tests {
     #[test]
     fn test_binlog_value_uint() {
         // u64::MAX exceeds i64::MAX, falls back to Text
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::UInt(18446744073709551615)), "col", None);
-        assert_eq!(result, ColumnValue::Text("18446744073709551615".to_string()));
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::UInt(18446744073709551615)),
+            "col",
+            None,
+        );
+        assert_eq!(
+            result,
+            ColumnValue::Text("18446744073709551615".to_string())
+        );
     }
 
     #[test]
     fn test_binlog_value_uint_fits_i64() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::UInt(100)), "col", None);
+        let result =
+            binlog_value_to_column_value(&BinlogValue::Value(Value::UInt(100)), "col", None);
         assert_eq!(result, ColumnValue::Int(100));
     }
 
     #[test]
     fn test_binlog_value_float() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Float(1.23)), "col", None);
+        let result =
+            binlog_value_to_column_value(&BinlogValue::Value(Value::Float(1.23)), "col", None);
         // f32 → f64 conversion introduces precision: 1.23f32 as f64 ≠ 1.23f64
         assert_eq!(result, ColumnValue::float(1.23f32 as f64));
     }
 
     #[test]
     fn test_binlog_value_double() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Double(4.567)), "col", None);
+        let result =
+            binlog_value_to_column_value(&BinlogValue::Value(Value::Double(4.567)), "col", None);
         assert_eq!(result, ColumnValue::float(4.567));
     }
 
     #[test]
     fn test_binlog_value_bytes_no_type_info() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Bytes(b"hello".to_vec())), "col", None);
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::Bytes(b"hello".to_vec())),
+            "col",
+            None,
+        );
         assert_eq!(result, ColumnValue::Text("hello".to_string()));
     }
 
@@ -763,32 +862,57 @@ mod tests {
 
     #[test]
     fn test_binlog_value_date_only() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Date(2024, 1, 15, 0, 0, 0, 0)), "col", None);
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::Date(2024, 1, 15, 0, 0, 0, 0)),
+            "col",
+            None,
+        );
         assert_eq!(result, ColumnValue::Date("2024-01-15".to_string()));
     }
 
     #[test]
     fn test_binlog_value_datetime() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Date(2024, 1, 15, 13, 45, 30, 0)), "col", None);
-        assert_eq!(result, ColumnValue::Timestamp("2024-01-15 13:45:30".to_string()));
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::Date(2024, 1, 15, 13, 45, 30, 0)),
+            "col",
+            None,
+        );
+        assert_eq!(
+            result,
+            ColumnValue::Timestamp("2024-01-15 13:45:30".to_string())
+        );
     }
 
     #[test]
     fn test_binlog_value_datetime_with_microseconds() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Date(2024, 1, 15, 13, 45, 30, 123456)), "col", None);
-        assert_eq!(result, ColumnValue::Timestamp("2024-01-15 13:45:30.123456".to_string()));
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::Date(2024, 1, 15, 13, 45, 30, 123456)),
+            "col",
+            None,
+        );
+        assert_eq!(
+            result,
+            ColumnValue::Timestamp("2024-01-15 13:45:30.123456".to_string())
+        );
     }
 
     #[test]
     fn test_binlog_value_time() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Time(false, 0, 13, 45, 30, 0)), "col", None);
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::Time(false, 0, 13, 45, 30, 0)),
+            "col",
+            None,
+        );
         assert_eq!(result, ColumnValue::Time("13:45:30".to_string()));
     }
 
     #[test]
     fn test_binlog_value_time_negative() {
-        let result = binlog_value_to_column_value(&BinlogValue::Value(Value::Time(true, 1, 2, 30, 0, 0)), "col", None);
+        let result = binlog_value_to_column_value(
+            &BinlogValue::Value(Value::Time(true, 1, 2, 30, 0, 0)),
+            "col",
+            None,
+        );
         assert_eq!(result, ColumnValue::Time("-26:30:00".to_string()));
     }
-
 }

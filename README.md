@@ -1,5 +1,6 @@
 # cdcflow
 
+[![CI](https://github.com/manfredcml/cdcflow/actions/workflows/ci.yml/badge.svg)](https://github.com/manfredcml/cdcflow/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 

@@ -71,9 +71,10 @@ impl RelationCache {
 
     /// Resolve tuple data into a named Row using the cached schema for the given relation OID.
     pub fn resolve_tuple(&self, rel_id: u32, tuple: &TupleData) -> Result<Row> {
-        let relation = self.relations.get(&rel_id).ok_or_else(|| {
-            CdcError::Protocol(format!("no cached relation for OID {rel_id}"))
-        })?;
+        let relation = self
+            .relations
+            .get(&rel_id)
+            .ok_or_else(|| CdcError::Protocol(format!("no cached relation for OID {rel_id}")))?;
 
         if tuple.columns.len() != relation.columns.len() {
             return Err(CdcError::Protocol(format!(
@@ -330,9 +331,24 @@ mod tests {
             name: "users".into(),
             replica_identity: b'd',
             columns: vec![
-                ColumnDef { flags: 1, name: "id".into(), type_oid: 23, type_modifier: -1 },
-                ColumnDef { flags: 0, name: "name".into(), type_oid: 25, type_modifier: -1 },
-                ColumnDef { flags: 0, name: "email".into(), type_oid: 25, type_modifier: -1 },
+                ColumnDef {
+                    flags: 1,
+                    name: "id".into(),
+                    type_oid: 23,
+                    type_modifier: -1,
+                },
+                ColumnDef {
+                    flags: 0,
+                    name: "name".into(),
+                    type_oid: 25,
+                    type_modifier: -1,
+                },
+                ColumnDef {
+                    flags: 0,
+                    name: "email".into(),
+                    type_oid: 25,
+                    type_modifier: -1,
+                },
             ],
         };
         cache.update(rel);
@@ -348,9 +364,24 @@ mod tests {
             name: "order_items".into(),
             replica_identity: b'd',
             columns: vec![
-                ColumnDef { flags: 1, name: "order_id".into(), type_oid: 23, type_modifier: -1 },
-                ColumnDef { flags: 1, name: "item_id".into(), type_oid: 23, type_modifier: -1 },
-                ColumnDef { flags: 0, name: "quantity".into(), type_oid: 23, type_modifier: -1 },
+                ColumnDef {
+                    flags: 1,
+                    name: "order_id".into(),
+                    type_oid: 23,
+                    type_modifier: -1,
+                },
+                ColumnDef {
+                    flags: 1,
+                    name: "item_id".into(),
+                    type_oid: 23,
+                    type_modifier: -1,
+                },
+                ColumnDef {
+                    flags: 0,
+                    name: "quantity".into(),
+                    type_oid: 23,
+                    type_modifier: -1,
+                },
             ],
         };
         cache.update(rel);
@@ -385,7 +416,10 @@ mod tests {
         assert_eq!(parse_pg_text(23, "42"), ColumnValue::Int(42));
         assert_eq!(parse_pg_text(23, "-1"), ColumnValue::Int(-1));
         // int8 (OID 20)
-        assert_eq!(parse_pg_text(20, "9223372036854775807"), ColumnValue::Int(i64::MAX));
+        assert_eq!(
+            parse_pg_text(20, "9223372036854775807"),
+            ColumnValue::Int(i64::MAX)
+        );
         // oid (OID 26)
         assert_eq!(parse_pg_text(26, "16384"), ColumnValue::Int(16384));
         // parse failure falls back to Text
@@ -398,21 +432,39 @@ mod tests {
         assert_eq!(parse_pg_text(701, "-1.5e10"), ColumnValue::float(-1.5e10));
         // parse failure
         assert_eq!(parse_pg_text(701, "NaN"), ColumnValue::float(f64::NAN));
-        assert_eq!(parse_pg_text(700, "not_a_float"), ColumnValue::Text("not_a_float".into()));
+        assert_eq!(
+            parse_pg_text(700, "not_a_float"),
+            ColumnValue::Text("not_a_float".into())
+        );
     }
 
     #[test]
     fn test_parse_pg_text_bytea() {
-        assert_eq!(parse_pg_text(17, "\\xDEADBEEF"), ColumnValue::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF]));
+        assert_eq!(
+            parse_pg_text(17, "\\xDEADBEEF"),
+            ColumnValue::Bytes(vec![0xDE, 0xAD, 0xBE, 0xEF])
+        );
         // Bad hex falls back to Text
-        assert_eq!(parse_pg_text(17, "\\xZZZZ"), ColumnValue::Text("\\xZZZZ".into()));
+        assert_eq!(
+            parse_pg_text(17, "\\xZZZZ"),
+            ColumnValue::Text("\\xZZZZ".into())
+        );
     }
 
     #[test]
     fn test_parse_pg_text_temporal() {
-        assert_eq!(parse_pg_text(1082, "2024-01-15"), ColumnValue::Date("2024-01-15".into()));
-        assert_eq!(parse_pg_text(1083, "10:30:00"), ColumnValue::Time("10:30:00".into()));
-        assert_eq!(parse_pg_text(1266, "10:30:00+05"), ColumnValue::Time("10:30:00+05".into()));
+        assert_eq!(
+            parse_pg_text(1082, "2024-01-15"),
+            ColumnValue::Date("2024-01-15".into())
+        );
+        assert_eq!(
+            parse_pg_text(1083, "10:30:00"),
+            ColumnValue::Time("10:30:00".into())
+        );
+        assert_eq!(
+            parse_pg_text(1266, "10:30:00+05"),
+            ColumnValue::Time("10:30:00+05".into())
+        );
         assert_eq!(
             parse_pg_text(1114, "2024-01-15 10:30:00"),
             ColumnValue::Timestamp("2024-01-15 10:30:00".into())
@@ -427,7 +479,10 @@ mod tests {
     fn test_parse_pg_text_fallback() {
         // text (25), varchar (1043), json (114), jsonb (3802), uuid (2950), numeric (1700)
         for oid in [25, 1043, 114, 3802, 2950, 1700] {
-            assert_eq!(parse_pg_text(oid, "some_value"), ColumnValue::Text("some_value".into()));
+            assert_eq!(
+                parse_pg_text(oid, "some_value"),
+                ColumnValue::Text("some_value".into())
+            );
         }
     }
 }

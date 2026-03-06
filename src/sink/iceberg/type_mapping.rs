@@ -78,9 +78,7 @@ mod tests {
                 },
             ),
             (
-                CanonicalType::VarString {
-                    length: Some(255),
-                },
+                CanonicalType::VarString { length: Some(255) },
                 PrimitiveType::String,
             ),
             (
@@ -88,9 +86,7 @@ mod tests {
                 PrimitiveType::String,
             ),
             (
-                CanonicalType::FixedString {
-                    length: Some(10),
-                },
+                CanonicalType::FixedString { length: Some(10) },
                 PrimitiveType::String,
             ),
             (CanonicalType::Text, PrimitiveType::String),
@@ -112,5 +108,4 @@ mod tests {
             );
         }
     }
-
 }

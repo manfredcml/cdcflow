@@ -76,9 +76,8 @@ async fn start_postgres() -> (ContainerAsync<Postgres>, String, u16) {
 }
 
 async fn connect_client(host: &str, port: u16) -> Client {
-    let conn_str = format!(
-        "host={host} port={port} user=postgres password=postgres dbname=postgres"
-    );
+    let conn_str =
+        format!("host={host} port={port} user=postgres password=postgres dbname=postgres");
     let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
         .await
         .expect("failed to connect to postgres");
@@ -109,10 +108,7 @@ async fn create_namespace(host: &str, port: u16, namespace: &str) {
 // Config / event helpers
 // ---------------------------------------------------------------------------
 
-fn make_config(
-    iceberg_host: &str,
-    iceberg_port: u16,
-) -> IcebergSinkConfig {
+fn make_config(iceberg_host: &str, iceberg_port: u16) -> IcebergSinkConfig {
     IcebergSinkConfig {
         catalog: IcebergCatalogConfig::Rest(RestCatalogConfig {
             uri: format!("http://{iceberg_host}:{iceberg_port}"),
@@ -171,7 +167,10 @@ impl TestEnv {
 
         let client = connect_client(&pg_host, pg_port).await;
         for ddl in source_tables_ddl {
-            client.batch_execute(ddl).await.expect("failed to create source table");
+            client
+                .batch_execute(ddl)
+                .await
+                .expect("failed to create source table");
         }
 
         create_namespace(&iceberg_host, iceberg_port, "default").await;
@@ -208,14 +207,13 @@ impl TestEnv {
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_iceberg_sink_all_change_kinds() {
-    let env = TestEnv::start(&[
-        "CREATE TABLE public.events_table (id INT, data TEXT)",
-    ])
-    .await;
+    let env = TestEnv::start(&["CREATE TABLE public.events_table (id INT, data TEXT)"]).await;
 
     let config = env.sink_config();
     let source_conn = env.source_connection();
-    let mut sink = IcebergSink::new(config, SinkMode::Cdc, source_conn).await.unwrap();
+    let mut sink = IcebergSink::new(config, SinkMode::Cdc, source_conn)
+        .await
+        .unwrap();
 
     let table_id = make_table_id("public", "events_table");
 
@@ -309,7 +307,9 @@ async fn test_iceberg_replication_insert_only() {
 
     let config = env.sink_config();
     let source_conn = env.source_connection();
-    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn).await.unwrap();
+    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn)
+        .await
+        .unwrap();
 
     let table_id = make_table_id("public", "rep_insert");
     let events = vec![
@@ -350,7 +350,9 @@ async fn test_iceberg_replication_insert_then_delete() {
 
     let config = env.sink_config();
     let source_conn = env.source_connection();
-    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn).await.unwrap();
+    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn)
+        .await
+        .unwrap();
 
     let table_id = make_table_id("public", "rep_del");
 
@@ -414,7 +416,9 @@ async fn test_iceberg_replication_update() {
 
     let config = env.sink_config();
     let source_conn = env.source_connection();
-    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn).await.unwrap();
+    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn)
+        .await
+        .unwrap();
 
     let table_id = make_table_id("public", "rep_upd");
 
@@ -476,14 +480,15 @@ async fn test_iceberg_replication_update() {
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_iceberg_replication_mixed_batch() {
-    let env = TestEnv::start(&[
-        "CREATE TABLE public.rep_mix (id SERIAL PRIMARY KEY, val TEXT NOT NULL)",
-    ])
-    .await;
+    let env =
+        TestEnv::start(&["CREATE TABLE public.rep_mix (id SERIAL PRIMARY KEY, val TEXT NOT NULL)"])
+            .await;
 
     let config = env.sink_config();
     let source_conn = env.source_connection();
-    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn).await.unwrap();
+    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn)
+        .await
+        .unwrap();
 
     let table_id = make_table_id("public", "rep_mix");
 
@@ -559,7 +564,9 @@ async fn test_iceberg_replication_multi_batch() {
 
     let config = env.sink_config();
     let source_conn = env.source_connection();
-    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn).await.unwrap();
+    let mut sink = IcebergSink::new(config, SinkMode::Replication, source_conn)
+        .await
+        .unwrap();
 
     let table_id = make_table_id("public", "rep_multi");
 

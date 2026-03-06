@@ -58,11 +58,11 @@ mod tests {
     use crate::admin::sqlite::SqliteAdminStore;
     use crate::admin::store::{AdminStore, CreateJobRequest};
     use crate::metrics::MetricsSnapshot;
-    use std::sync::Arc;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
     use axum::Router;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     async fn test_state_with_data() -> AdminState {
@@ -75,7 +75,9 @@ mod tests {
             })
             .await
             .unwrap();
-        db.register_worker("w1", &job.id, "addr", "h", 1).await.unwrap();
+        db.register_worker("w1", &job.id, "addr", "h", 1)
+            .await
+            .unwrap();
         for i in 0..5 {
             let snap = MetricsSnapshot {
                 events_total: i * 10,

@@ -73,7 +73,7 @@ impl ReplicationClient {
         msg.put_i32(0);
         // Protocol version 3.0
         msg.put_i32(196608); // 3 << 16
-        // Parameters
+                             // Parameters
         put_cstring(&mut msg, "user");
         put_cstring(&mut msg, user);
         put_cstring(&mut msg, "database");
@@ -230,11 +230,7 @@ impl ReplicationClient {
         Ok(())
     }
 
-    async fn send_sasl_initial_response(
-        &mut self,
-        mechanism: &str,
-        data: &[u8],
-    ) -> Result<()> {
+    async fn send_sasl_initial_response(&mut self, mechanism: &str, data: &[u8]) -> Result<()> {
         let mut msg = BytesMut::new();
         msg.put_u8(b'p');
         let len = 4 + mechanism.len() + 1 + 4 + data.len();
@@ -301,8 +297,7 @@ impl ReplicationClient {
                 b'T' => {
                     // RowDescription
                     if payload.len() >= 2 {
-                        num_cols =
-                            i16::from_be_bytes(payload[0..2].try_into().unwrap()) as usize;
+                        num_cols = i16::from_be_bytes(payload[0..2].try_into().unwrap()) as usize;
                     }
                 }
                 b'D' => {
@@ -395,9 +390,7 @@ impl ReplicationClient {
                 }
                 b'E' => {
                     let err_msg = parse_error_response(&payload);
-                    return Err(CdcError::Protocol(format!(
-                        "replication error: {err_msg}"
-                    )));
+                    return Err(CdcError::Protocol(format!("replication error: {err_msg}")));
                 }
                 _ => {
                     tracing::warn!(tag = ?( tag as char), "skipping unexpected replication message");
@@ -445,8 +438,7 @@ impl ReplicationClient {
         }
 
         let tag = self.buf[0];
-        let len =
-            i32::from_be_bytes(self.buf[1..5].try_into().unwrap()) as usize;
+        let len = i32::from_be_bytes(self.buf[1..5].try_into().unwrap()) as usize;
 
         // Total message size: 1 (tag) + len (which includes its own 4 bytes)
         let total = 1 + len;
@@ -526,7 +518,9 @@ fn parse_data_row(payload: &[u8], expected_cols: usize) -> Result<Vec<String>> {
 
     for _ in 0..num_cols {
         if buf.len() < 4 {
-            return Err(CdcError::Protocol("DataRow truncated at column length".into()));
+            return Err(CdcError::Protocol(
+                "DataRow truncated at column length".into(),
+            ));
         }
         let col_len = i32::from_be_bytes(buf[0..4].try_into().unwrap());
         buf = &buf[4..];
@@ -536,7 +530,9 @@ fn parse_data_row(payload: &[u8], expected_cols: usize) -> Result<Vec<String>> {
         } else {
             let len = col_len as usize;
             if buf.len() < len {
-                return Err(CdcError::Protocol("DataRow truncated at column data".into()));
+                return Err(CdcError::Protocol(
+                    "DataRow truncated at column data".into(),
+                ));
             }
             let value = String::from_utf8_lossy(&buf[..len]).into_owned();
             buf = &buf[len..];
