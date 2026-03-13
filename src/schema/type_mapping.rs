@@ -9,6 +9,7 @@ pub fn parse_source_type(dialect: SourceDialect, raw_type: &str) -> CanonicalTyp
     match dialect {
         SourceDialect::Postgres => parse_postgres_type(&dt),
         SourceDialect::Mysql => parse_mysql_type(&dt),
+        SourceDialect::Mongodb => parse_mongodb_type(&dt),
     }
 }
 
@@ -139,6 +140,21 @@ fn parse_mysql_type(dt: &str) -> CanonicalType {
 
         "json" => CanonicalType::Json,
 
+        _ => CanonicalType::Text,
+    }
+}
+
+fn parse_mongodb_type(dt: &str) -> CanonicalType {
+    match dt {
+        "objectid" | "string" => CanonicalType::Text,
+        "int" => CanonicalType::Int,
+        "long" => CanonicalType::BigInt,
+        "double" => CanonicalType::Double,
+        "bool" => CanonicalType::Boolean,
+        "date" => CanonicalType::TimestampTz,
+        "bindata" => CanonicalType::Binary,
+        "object" | "array" => CanonicalType::Json,
+        "decimal" => CanonicalType::Text, // Decimal128 has 34 digits precision, store as text
         _ => CanonicalType::Text,
     }
 }
@@ -500,6 +516,47 @@ mod tests {
         assert_eq!(
             parse_source_type(SourceDialect::Mysql, "geometry"),
             CanonicalType::Text
+        );
+    }
+
+    #[test]
+    fn test_mongodb_type_mapping() {
+        let cases = vec![
+            ("objectid", CanonicalType::Text),
+            ("string", CanonicalType::Text),
+            ("int", CanonicalType::Int),
+            ("long", CanonicalType::BigInt),
+            ("double", CanonicalType::Double),
+            ("bool", CanonicalType::Boolean),
+            ("date", CanonicalType::TimestampTz),
+            ("bindata", CanonicalType::Binary),
+            ("object", CanonicalType::Json),
+            ("array", CanonicalType::Json),
+            ("decimal", CanonicalType::Text),
+            ("unknown_bson_type", CanonicalType::Text),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                parse_source_type(SourceDialect::Mongodb, input),
+                expected,
+                "failed for MongoDB type '{input}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mongodb_case_insensitive() {
+        assert_eq!(
+            parse_source_type(SourceDialect::Mongodb, "ObjectId"),
+            CanonicalType::Text
+        );
+        assert_eq!(
+            parse_source_type(SourceDialect::Mongodb, "STRING"),
+            CanonicalType::Text
+        );
+        assert_eq!(
+            parse_source_type(SourceDialect::Mongodb, "Int"),
+            CanonicalType::Int
         );
     }
 

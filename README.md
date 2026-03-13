@@ -9,7 +9,7 @@ destinations.
 
 ## Features
 
-- **Database sources**: PostgreSQL and MySQL
+- **Database sources**: PostgreSQL, MySQL, and MongoDB
 - **Sink destinations**: Stdout, Kafka, PostgreSQL, Apache Iceberg
 - **Offset stores**: SQLite, Memoryfor resumable streaming after restarts
 - **Sync modes**: CDC (append-only changelog) and Replication (live replica of source tables)
@@ -20,7 +20,7 @@ destinations.
 ```
 ┌────────────┐     ┌────────────┐     ┌──────────────┐
 │   Source   │────▶│  Pipeline  │────▶│     Sink     │
-│ PG / MySQL │     │ (batch +   │     │ Kafka / PG / │
+│PG/MySQL/Mon│     │ (batch +   │     │ Kafka / PG / │
 │            │     │  flush)    │     │ Iceberg / Out│
 └────────────┘     └─────┬──────┘     └──────────────┘
                          │
@@ -42,7 +42,7 @@ checkpoints progress in the offset store. On restart, the pipeline resumes from 
 The standalone mode runs a single pipeline without the admin server. This is ideal for local testing and development.
 
 ```bash
-# Start local infrastructure (PostgreSQL, MySQL, Kafka, MinIO, Iceberg, Trino)
+# Start local infrastructure (PostgreSQL, MySQL, MongoDB, Kafka, MinIO, Iceberg, Trino)
 # You can optionally start just the components you need for testing a specific source/sink combo
 cd example && docker compose up -d && cd ..
 

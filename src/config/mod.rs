@@ -1,5 +1,6 @@
 mod iceberg_sink;
 mod kafka_sink;
+mod mongodb_source;
 mod mysql_source;
 mod offset;
 mod postgres_sink;
@@ -9,6 +10,7 @@ mod source;
 
 pub use self::iceberg_sink::{IcebergCatalogConfig, IcebergSinkConfig, RestCatalogConfig};
 pub use self::kafka_sink::KafkaSinkConfig;
+pub use self::mongodb_source::MongodbSourceConfig;
 pub use self::mysql_source::MySqlSourceConfig;
 pub use self::offset::OffsetConfig;
 pub use self::postgres_sink::PostgresSinkConfig;
@@ -37,6 +39,8 @@ pub enum SourceConnectionConfig {
     Postgres { url: String },
     #[serde(rename = "mysql")]
     Mysql { url: String },
+    #[serde(rename = "mongodb")]
+    Mongodb { url: String },
 }
 
 /// Top-level configuration for the CDC agent.

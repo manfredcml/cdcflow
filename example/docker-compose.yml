@@ -50,6 +50,28 @@ services:
       timeout: 5s
       retries: 10
 
+  mongodb:
+    image: mongo:7
+    container_name: cdc-mongodb
+    ports:
+      - "27017:27017"
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongodb-init:
+    image: mongo:7
+    container_name: cdc-mongodb-init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    volumes:
+      - ./init/mongodb/init.js:/init.js
+    entrypoint: ["mongosh", "--host", "mongodb", "--file", "/init.js"]
+
   # ──────────────────────────────────────────────
   # Infrastructure
   # ──────────────────────────────────────────────

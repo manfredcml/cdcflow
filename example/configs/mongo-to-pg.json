@@ -1,0 +1,23 @@
+{
+  "source": {
+    "type": "mongodb",
+    "connection_string": "mongodb://localhost:27017/?replicaSet=rs0",
+    "database": "demo",
+    "collections": ["users", "orders"]
+  },
+  "sink": {
+    "type": "postgres",
+    "host": "localhost",
+    "port": 5433,
+    "user": "postgres",
+    "password": "postgres",
+    "database": "cdc_target",
+    "schema": "public",
+    "table_prefix": ""
+  },
+  "offset": {
+    "type": "sqlite",
+    "path": "/tmp/cdc-offsets.db",
+    "key": "mongo-pg"
+  }
+}

@@ -26,6 +26,9 @@ pub enum CdcError {
     #[error("mysql error: {0}")]
     Mysql(String),
 
+    #[error("mongodb error: {0}")]
+    Mongodb(String),
+
     #[error("iceberg error: {0}")]
     Iceberg(String),
 

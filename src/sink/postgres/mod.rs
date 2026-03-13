@@ -135,7 +135,9 @@ impl PostgresSink {
                         .map(|col| {
                             let sql_type = match dialect {
                                 SourceDialect::Postgres => col.source_type.clone(),
-                                SourceDialect::Mysql => canonical_to_pg_ddl(&col.canonical_type),
+                                SourceDialect::Mysql | SourceDialect::Mongodb => {
+                                    canonical_to_pg_ddl(&col.canonical_type)
+                                }
                             };
                             (col.name.clone(), sql_type)
                         })
@@ -229,7 +231,9 @@ impl PostgresSink {
                         .map(|col| {
                             let sql_type = match dialect {
                                 SourceDialect::Postgres => col.source_type.clone(),
-                                SourceDialect::Mysql => canonical_to_pg_ddl(&col.canonical_type),
+                                SourceDialect::Mysql | SourceDialect::Mongodb => {
+                                    canonical_to_pg_ddl(&col.canonical_type)
+                                }
                             };
                             (col.name.clone(), sql_type)
                         })
@@ -306,7 +310,9 @@ impl PostgresSink {
                 for col in &source_columns {
                     let sql_type = match dialect {
                         SourceDialect::Postgres => col.source_type.clone(),
-                        SourceDialect::Mysql => canonical_to_pg_ddl(&col.canonical_type),
+                        SourceDialect::Mysql | SourceDialect::Mongodb => {
+                            canonical_to_pg_ddl(&col.canonical_type)
+                        }
                     };
                     typed_cols.push((col.name.clone(), sql_type.clone()));
                     typed_cols.push((format!("_old_{}", col.name), sql_type));
@@ -320,7 +326,9 @@ impl PostgresSink {
                 for col in &source_columns {
                     let sql_type = match dialect {
                         SourceDialect::Postgres => col.source_type.clone(),
-                        SourceDialect::Mysql => canonical_to_pg_ddl(&col.canonical_type),
+                        SourceDialect::Mysql | SourceDialect::Mongodb => {
+                            canonical_to_pg_ddl(&col.canonical_type)
+                        }
                     };
                     info_mut.columns.push(col.name.clone());
                     info_mut.column_types.insert(col.name.clone(), sql_type);
@@ -425,7 +433,9 @@ impl PostgresSink {
                     .map(|col| {
                         let sql_type = match dialect {
                             SourceDialect::Postgres => col.source_type.clone(),
-                            SourceDialect::Mysql => canonical_to_pg_ddl(&col.canonical_type),
+                            SourceDialect::Mysql | SourceDialect::Mongodb => {
+                                canonical_to_pg_ddl(&col.canonical_type)
+                            }
                         };
                         (col.name.clone(), sql_type)
                     })

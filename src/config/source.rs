@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::mongodb_source::MongodbSourceConfig;
 use super::mysql_source::MySqlSourceConfig;
 use super::postgres_source::PostgresSourceConfig;
 
@@ -11,6 +12,8 @@ pub enum SourceConfig {
     Postgres(PostgresSourceConfig),
     #[serde(rename = "mysql")]
     Mysql(MySqlSourceConfig),
+    #[serde(rename = "mongodb")]
+    Mongodb(MongodbSourceConfig),
 }
 
 impl SourceConfig {
@@ -46,6 +49,9 @@ impl SourceConfig {
                     my.port,
                     my.database,
                 ),
+            },
+            SourceConfig::Mongodb(mg) => super::SourceConnectionConfig::Mongodb {
+                url: mg.connection_string.clone(),
             },
         }
     }
@@ -117,6 +123,21 @@ mod tests {
                 );
             }
             _ => panic!("expected Mysql variant"),
+        }
+    }
+
+    #[test]
+    fn test_mongodb_to_connection_config() {
+        let config = SourceConfig::Mongodb(super::MongodbSourceConfig {
+            connection_string: "mongodb://localhost:27017/?replicaSet=rs0".into(),
+            database: "mydb".into(),
+            collections: vec![],
+        });
+        match config.to_connection_config() {
+            SourceConnectionConfig::Mongodb { url } => {
+                assert_eq!(url, "mongodb://localhost:27017/?replicaSet=rs0");
+            }
+            _ => panic!("expected Mongodb variant"),
         }
     }
 

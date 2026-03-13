@@ -1,0 +1,16 @@
+{
+  "source": {
+    "type": "mongodb",
+    "connection_string": "mongodb://localhost:27017/?replicaSet=rs0",
+    "database": "demo",
+    "collections": ["users", "orders"]
+  },
+  "sink": {
+    "type": "stdout"
+  },
+  "offset": {
+    "type": "sqlite",
+    "path": "/tmp/cdc-offsets.db",
+    "key": "mongo-stdout"
+  }
+}

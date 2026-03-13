@@ -8,7 +8,7 @@ description = "A Change Data Capture (CDC) pipeline in Rust"
 repository = "https://github.com/manfredcml/cdcflow"
 homepage = "https://github.com/manfredcml/cdcflow"
 readme = "README.md"
-keywords = ["cdc", "change-data-capture", "replication", "postgres", "mysql"]
+keywords = ["cdc", "change-data-capture", "replication", "postgres", "mongodb"]
 categories = ["database", "command-line-utilities"]
 exclude = ["benchmark/"]
 
@@ -33,6 +33,7 @@ arrow-schema = "57"
 parquet = { version = "57", default-features = false, features = ["arrow"] }
 async-trait = "0.1"
 rdkafka = { version = "0.39.0", features = ["cmake-build", "tokio"] }
+mongodb = "3"
 ordered-float = { version = "5.1.0", features = ["serde"] }
 chrono = "0.4"
 axum = { version = "0.8", features = ["json"] }
@@ -50,4 +51,4 @@ approx_constant = "allow"
 tower = "0.5"
 tempfile = "3"
 testcontainers = "0.27.1"
-testcontainers-modules = { version = "0.15.0", features = ["postgres", "mysql", "kafka"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "mysql", "kafka", "mongo"] }
