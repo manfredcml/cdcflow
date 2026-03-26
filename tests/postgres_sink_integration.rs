@@ -163,6 +163,34 @@ fn make_truncate_event(schema: &str, table: &str) -> CdcEvent {
     }
 }
 
+/// Create a MongoDB-shaped insert event (schema=database, _id as PK, mixed types).
+fn make_mongo_insert(database: &str, collection: &str, id: &str, name: &str) -> CdcEvent {
+    CdcEvent {
+        lsn: Lsn(100),
+        timestamp_us: 1_700_000_000_000_000,
+        xid: 0,
+        table: TableId {
+            schema: database.into(),
+            name: collection.into(),
+            oid: 0,
+        },
+        op: ChangeOp::Insert,
+        new: Some(
+            vec![
+                ("_id".to_string(), ColumnValue::Text(id.into())),
+                ("name".to_string(), ColumnValue::Text(name.into())),
+                ("age".to_string(), ColumnValue::Int(30)),
+                ("active".to_string(), ColumnValue::Bool(true)),
+                ("score".to_string(), ColumnValue::float(95.5)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        old: None,
+        primary_key_columns: vec!["_id".into()],
+    }
+}
+
 // ─────────────────────────────────────────────────
 // CDC Mode Tests
 // ─────────────────────────────────────────────────
@@ -889,4 +917,214 @@ async fn test_replication_mode_schema_evolution() {
     assert_eq!(email2, Some("bob-new@example.com"));
     let phone2: Option<&str> = rows[1].get("phone");
     assert_eq!(phone2, Some("555-1234"));
+}
+
+// ─────────────────────────────────────────────────
+// MongoDB Source → PostgreSQL Sink Tests
+// ─────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_cdc_mode_mongodb_source_events() {
+    let (_container, host, port) = start_postgres().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // MongoDB source has no real source DB for schema inference — we use
+    // SourceConnectionConfig::Mongodb which triggers canonical type mapping.
+    // But the PG sink in CDC mode needs a source_connection for auto-creating
+    // tables. Since we don't have a real MongoDB, pre-create the target table
+    // with the expected schema instead.
+    let client = connect_client(&host, port).await;
+    client
+        .execute(
+            "CREATE TABLE \"public\".\"users\" (
+                \"_cdc_op\" text,
+                \"_cdc_lsn\" bigint,
+                \"_cdc_timestamp_us\" bigint,
+                \"_cdc_snapshot\" boolean,
+                \"_cdc_schema\" text,
+                \"_cdc_table\" text,
+                \"_cdc_primary_key_columns\" text,
+                \"_id\" text,
+                \"name\" text,
+                \"age\" integer,
+                \"active\" boolean,
+                \"score\" double precision,
+                \"_old__id\" text,
+                \"_old_name\" text,
+                \"_old_age\" integer,
+                \"_old_active\" boolean,
+                \"_old_score\" double precision
+            )",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let config = make_sink_config(&host, port);
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+        .await
+        .unwrap();
+
+    let events = vec![
+        make_mongo_insert("demo", "users", "507f1f77bcf86cd799439011", "Alice"),
+        make_mongo_insert("demo", "users", "507f1f77bcf86cd799439012", "Bob"),
+    ];
+
+    sink.write_batch(&events).await.unwrap();
+    sink.flush().await.unwrap();
+
+    // Verify rows landed with correct typed values
+    let rows = client
+        .query(
+            "SELECT \"_cdc_op\", \"_id\", \"name\", \"age\", \"active\", \"score\" \
+             FROM \"public\".\"users\" ORDER BY \"_id\"",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 2);
+
+    let op: &str = rows[0].get("_cdc_op");
+    assert_eq!(op, "I");
+    let id: Option<&str> = rows[0].get("_id");
+    assert_eq!(id, Some("507f1f77bcf86cd799439011"));
+    let name: Option<&str> = rows[0].get("name");
+    assert_eq!(name, Some("Alice"));
+    let age: Option<i32> = rows[0].get("age");
+    assert_eq!(age, Some(30));
+    let active: Option<bool> = rows[0].get("active");
+    assert_eq!(active, Some(true));
+    let score: Option<f64> = rows[0].get("score");
+    assert_eq!(score, Some(95.5));
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_replication_mode_mongodb_source_upsert_delete() {
+    let (_container, host, port) = start_postgres().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Pre-create table with MongoDB-style schema (_id as PK)
+    let client = connect_client(&host, port).await;
+    client
+        .execute(
+            "CREATE TABLE \"public\".\"items\" (
+                \"_id\" TEXT NOT NULL,
+                \"name\" TEXT,
+                \"price\" DOUBLE PRECISION,
+                PRIMARY KEY (\"_id\")
+            )",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let config = make_sink_config(&host, port);
+    let mut sink = PostgresSink::new(config, SinkMode::Replication, None)
+        .await
+        .unwrap();
+
+    // Insert
+    let insert = CdcEvent {
+        lsn: Lsn(100),
+        timestamp_us: 1_700_000_000_000_000,
+        xid: 0,
+        table: TableId {
+            schema: "demo".into(),
+            name: "items".into(),
+            oid: 0,
+        },
+        op: ChangeOp::Insert,
+        new: Some(
+            vec![
+                ("_id".to_string(), ColumnValue::Text("item1".into())),
+                ("name".to_string(), ColumnValue::Text("Widget".into())),
+                ("price".to_string(), ColumnValue::float(19.99)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        old: None,
+        primary_key_columns: vec!["_id".into()],
+    };
+    sink.write_batch(&[insert]).await.unwrap();
+    sink.flush().await.unwrap();
+
+    let count: i64 = client
+        .query_one("SELECT COUNT(*) FROM \"public\".\"items\"", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1);
+
+    // Update (upsert)
+    let update = CdcEvent {
+        lsn: Lsn(200),
+        timestamp_us: 1_700_000_000_000_001,
+        xid: 0,
+        table: TableId {
+            schema: "demo".into(),
+            name: "items".into(),
+            oid: 0,
+        },
+        op: ChangeOp::Update,
+        new: Some(
+            vec![
+                ("_id".to_string(), ColumnValue::Text("item1".into())),
+                ("name".to_string(), ColumnValue::Text("Widget Pro".into())),
+                ("price".to_string(), ColumnValue::float(29.99)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        old: Some(
+            vec![("_id".to_string(), ColumnValue::Text("item1".into()))]
+                .into_iter()
+                .collect(),
+        ),
+        primary_key_columns: vec!["_id".into()],
+    };
+    sink.write_batch(&[update]).await.unwrap();
+    sink.flush().await.unwrap();
+
+    // Still 1 row, but updated
+    let row = client
+        .query_one("SELECT \"name\", \"price\" FROM \"public\".\"items\"", &[])
+        .await
+        .unwrap();
+    let name: Option<&str> = row.get("name");
+    assert_eq!(name, Some("Widget Pro"));
+    let price: Option<f64> = row.get("price");
+    assert_eq!(price, Some(29.99));
+
+    // Delete
+    let delete = CdcEvent {
+        lsn: Lsn(300),
+        timestamp_us: 1_700_000_000_000_002,
+        xid: 0,
+        table: TableId {
+            schema: "demo".into(),
+            name: "items".into(),
+            oid: 0,
+        },
+        op: ChangeOp::Delete,
+        new: None,
+        old: Some(
+            vec![("_id".to_string(), ColumnValue::Text("item1".into()))]
+                .into_iter()
+                .collect(),
+        ),
+        primary_key_columns: vec!["_id".into()],
+    };
+    sink.write_batch(&[delete]).await.unwrap();
+    sink.flush().await.unwrap();
+
+    let count: i64 = client
+        .query_one("SELECT COUNT(*) FROM \"public\".\"items\"", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0);
 }

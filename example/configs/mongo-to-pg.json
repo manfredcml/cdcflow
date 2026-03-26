@@ -1,7 +1,7 @@
 {
   "source": {
     "type": "mongodb",
-    "connection_string": "mongodb://localhost:27017/?replicaSet=rs0",
+    "connection_string": "mongodb://localhost:27017/?replicaSet=rs0&directConnection=true",
     "database": "demo",
     "collections": ["users", "orders"]
   },

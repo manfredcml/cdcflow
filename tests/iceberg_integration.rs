@@ -651,3 +651,88 @@ async fn test_iceberg_replication_multi_batch() {
         "expected at least 1 delete manifest, got {delete_count}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MongoDB Source → Iceberg Sink Tests
+// ---------------------------------------------------------------------------
+
+/// Test that MongoDB-shaped CDC events (schemaless, _id PK, mixed types) write
+/// to Iceberg correctly in CDC mode. Uses a MongoDB SourceConnectionConfig so
+/// the type mapping goes through the canonical Mongodb dialect path.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_iceberg_cdc_mongodb_source() {
+    // We still need a Postgres for source schema inference when the sink
+    // auto-creates the table. Create a source table that mirrors what a
+    // MongoDB collection's inferred schema would look like.
+    let env = TestEnv::start(&[
+        "CREATE TABLE public.mongo_users (_id TEXT, name TEXT, age INTEGER, active BOOLEAN)",
+    ])
+    .await;
+
+    let config = env.sink_config();
+    let source_conn = env.source_connection();
+    let mut sink = IcebergSink::new(config, SinkMode::Cdc, source_conn)
+        .await
+        .unwrap();
+
+    let table_id = make_table_id("public", "mongo_users");
+
+    // MongoDB-shaped events: _id as text, mixed types
+    let events = vec![
+        CdcEvent {
+            lsn: Lsn(100),
+            timestamp_us: 1_700_000_000_000_000,
+            xid: 0,
+            table: table_id.clone(),
+            op: ChangeOp::Snapshot,
+            new: Some(BTreeMap::from([
+                (
+                    "_id".into(),
+                    ColumnValue::Text("507f1f77bcf86cd799439011".into()),
+                ),
+                ("name".into(), ColumnValue::Text("Alice".into())),
+                ("age".into(), ColumnValue::Text("30".into())),
+                ("active".into(), ColumnValue::Text("true".into())),
+            ])),
+            old: None,
+            primary_key_columns: vec!["_id".into()],
+        },
+        CdcEvent {
+            lsn: Lsn(200),
+            timestamp_us: 1_700_000_000_000_001,
+            xid: 0,
+            table: table_id.clone(),
+            op: ChangeOp::Insert,
+            new: Some(BTreeMap::from([
+                (
+                    "_id".into(),
+                    ColumnValue::Text("507f1f77bcf86cd799439012".into()),
+                ),
+                ("name".into(), ColumnValue::Text("Bob".into())),
+                ("age".into(), ColumnValue::Text("25".into())),
+                ("active".into(), ColumnValue::Text("false".into())),
+            ])),
+            old: None,
+            primary_key_columns: vec!["_id".into()],
+        },
+    ];
+
+    sink.write_batch(&events).await.unwrap();
+    sink.flush().await.unwrap();
+
+    // Verify table was created and has data
+    let catalog = build_test_catalog(&env).await;
+    let ns = NamespaceIdent::from_strs(["default"]).unwrap();
+    let ident = TableIdent::new(ns, "cdc_test_mongo_users".to_string());
+    let table = catalog.load_table(&ident).await.unwrap();
+    let snapshot = table.metadata().current_snapshot().unwrap();
+    let manifest_list = snapshot
+        .load_manifest_list(table.file_io(), &table.metadata_ref())
+        .await
+        .unwrap();
+    assert!(
+        !manifest_list.entries().is_empty(),
+        "should have at least one manifest"
+    );
+}

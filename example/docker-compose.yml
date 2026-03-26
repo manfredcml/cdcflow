@@ -70,7 +70,7 @@ services:
         condition: service_healthy
     volumes:
       - ./init/mongodb/init.js:/init.js
-    entrypoint: ["mongosh", "--host", "mongodb", "--file", "/init.js"]
+    entrypoint: ["mongosh", "mongodb://mongodb:27017/?directConnection=true", "--file", "/init.js"]
 
   # ──────────────────────────────────────────────
   # Infrastructure
