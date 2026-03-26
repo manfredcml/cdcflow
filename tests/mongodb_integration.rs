@@ -59,7 +59,7 @@ impl Sink for CollectorSink {
 /// Start a MongoDB container configured as a single-node replica set.
 async fn start_mongodb() -> (ContainerAsync<Mongo>, String, u16) {
     let container = Mongo::default()
-        .with_tag("7")
+        .with_tag("8")
         .with_cmd(vec![
             "mongod".to_string(),
             "--replSet".to_string(),
