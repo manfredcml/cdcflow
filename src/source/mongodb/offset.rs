@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CdcError, Result};
 
-/// A cluster time (BSON timestamp) in a form that round-trips through plain JSON.
-///
-/// `bson::Timestamp`'s own serde representation depends on the serializer, so the
-/// two components are stored explicitly instead.
+/// Cluster time split into its two components — `bson::Timestamp`'s own serde
+/// representation depends on the serializer, so it does not round-trip as JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClusterTime {
     pub time: u32,
@@ -34,31 +32,25 @@ impl From<ClusterTime> for Timestamp {
 
 /// The persisted offset for a MongoDB source.
 ///
-/// Externally tagged so every stored offset carries an unambiguous kind. A bare
-/// resume token must never be stored on its own: `ResumeToken` deserializes from
-/// *any* JSON object, so an untagged offset from the snapshot phase would silently
-/// be accepted as a (bogus) resume token and rejected by the server on resume.
+/// Tagged because `ResumeToken` deserializes from *any* JSON object: an
+/// untagged snapshot offset would be read back as a bogus resume token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MongoOffset {
-    /// Snapshot is partially done. Snapshots are not resumable mid-way, so a
-    /// restart from this offset re-runs the whole snapshot.
+    /// Snapshots are not resumable mid-way — this re-runs the whole snapshot.
     SnapshotInProgress { collection: String, count: u64 },
-    /// Snapshot finished for all collections. The change stream starts at the
-    /// cluster time recorded before the snapshot began.
+    /// All collections scanned; stream starts at the recorded cluster time.
     SnapshotComplete { cluster_time: ClusterTime },
     /// Streaming position: an opaque change stream resume token.
     Token(ResumeToken),
 }
 
 impl MongoOffset {
-    /// Serialize to the JSON string persisted by the offset store.
     pub fn to_json(&self) -> Result<String> {
         serde_json::to_string(self)
             .map_err(|e| CdcError::Mongodb(format!("failed to serialize offset: {e}")))
     }
 
-    /// Parse an offset previously produced by [`MongoOffset::to_json`].
     pub fn from_json(s: &str) -> Result<Self> {
         serde_json::from_str(s).map_err(|e| {
             CdcError::Mongodb(format!(

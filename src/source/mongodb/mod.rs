@@ -12,22 +12,58 @@ use crate::error::{CdcError, Result};
 use crate::offset::OffsetStore;
 use crate::source::Source;
 
-use self::change_stream::{run_change_stream, ResumePoint};
+use self::change_stream::{
+    is_resume_point_lost, open_change_stream, pump_change_stream, ResumePoint,
+};
 use self::offset::MongoOffset;
 use self::snapshot::perform_snapshot;
 
-/// Outcome of sending an event to the pipeline.
+/// Fail fast on a configured collection that does not exist — MongoDB answers
+/// reads on one with empty results, so a typo would silently replicate nothing.
+async fn validate_collections(
+    client: &mongodb::Client,
+    database: &str,
+    collections: &[String],
+) -> Result<()> {
+    if collections.is_empty() {
+        return Ok(());
+    }
+
+    let existing = client
+        .database(database)
+        .list_collection_names()
+        .await
+        .map_err(|e| CdcError::Mongodb(format!("failed to list collections: {e}")))?;
+
+    let missing: Vec<&str> = collections
+        .iter()
+        .map(|c| c.as_str())
+        .filter(|c| !existing.iter().any(|e| e == c))
+        .collect();
+
+    if !missing.is_empty() {
+        return Err(CdcError::Mongodb(format!(
+            "configured collection(s) not found in database {database}: {}. Available: {}",
+            missing.join(", "),
+            if existing.is_empty() {
+                "(none)".to_string()
+            } else {
+                existing.join(", ")
+            }
+        )));
+    }
+
+    Ok(())
+}
+
 pub(crate) enum SendOutcome {
     Sent,
     /// The pipeline stopped receiving while a shutdown was in flight.
     ShuttingDown,
 }
 
-/// Send an event to the pipeline, treating a closed channel during shutdown as
-/// a clean stop rather than an error.
-///
-/// The pipeline's receive loop exits as soon as the shutdown token fires, which
-/// can happen between a source's own cancellation checks and its next send.
+/// Send an event to the pipeline. The receive loop exits as soon as the
+/// shutdown token fires, so a closed channel then is a clean stop, not an error.
 pub(crate) async fn send_event(
     sender: &mpsc::Sender<crate::source::SourceEvent>,
     event: crate::source::SourceEvent,
@@ -73,6 +109,8 @@ impl<O: OffsetStore + Sync> Source for MongodbSource<O> {
         let client = mongodb::Client::with_uri_str(&self.config.connection_string)
             .await
             .map_err(|e| CdcError::Mongodb(format!("failed to connect: {e}")))?;
+
+        validate_collections(&client, &self.config.database, &self.config.collections).await?;
 
         // Phase 1: Determine start position (snapshot or resume)
         let saved_offset = self.offset_store.load().await?;
@@ -137,14 +175,48 @@ impl<O: OffsetStore + Sync> Source for MongodbSource<O> {
             "starting change stream"
         );
 
-        run_change_stream(
+        let mut stream = match open_change_stream(
             &client,
             &self.config.database,
             &self.config.collections,
-            resume_point,
-            &sender,
-            &shutdown,
+            &resume_point,
         )
         .await
+        {
+            Ok(stream) => stream,
+            // Position gone from the oplog: re-snapshot, or every restart wedges.
+            Err(e) if is_resume_point_lost(&e) => {
+                tracing::warn!(
+                    error = %e,
+                    "stored change stream position is no longer in the oplog; re-running the snapshot"
+                );
+
+                let result = perform_snapshot(
+                    &client,
+                    &self.config.database,
+                    &self.config.collections,
+                    &sender,
+                    &shutdown,
+                )
+                .await?;
+
+                if !result.completed {
+                    return Ok(());
+                }
+
+                open_change_stream(
+                    &client,
+                    &self.config.database,
+                    &self.config.collections,
+                    &ResumePoint::AfterSnapshot {
+                        snapshot_time: result.snapshot_time,
+                    },
+                )
+                .await?
+            }
+            Err(e) => return Err(e),
+        };
+
+        pump_change_stream(&mut stream, &self.config.database, &sender, &shutdown).await
     }
 }

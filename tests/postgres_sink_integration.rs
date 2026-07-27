@@ -1128,3 +1128,81 @@ async fn test_replication_mode_mongodb_source_upsert_delete() {
         .get(0);
     assert_eq!(count, 0);
 }
+
+/// A field missing from a batch of MongoDB documents is not a dropped column —
+/// the target column and its data must survive.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_replication_mode_mongodb_sparse_field_does_not_drop_column() {
+    let (_container, host, port) = start_postgres().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let client = connect_client(&host, port).await;
+    client
+        .execute(
+            "CREATE TABLE \"public\".\"items\" (
+                \"_id\" TEXT NOT NULL,
+                \"name\" TEXT,
+                \"nickname\" TEXT,
+                PRIMARY KEY (\"_id\")
+            )",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let mut sink = PostgresSink::new(
+        make_sink_config(&host, port),
+        SinkMode::Replication,
+        Some(SourceConnectionConfig::Mongodb {
+            // Never dialled: the drop path short-circuits for schemaless sources.
+            url: "mongodb://127.0.0.1:1/?connectTimeoutMS=100".into(),
+        }),
+    )
+    .await
+    .unwrap();
+
+    // A full-row event that omits `nickname`, as such documents routinely do.
+    let event = CdcEvent {
+        lsn: Lsn(100),
+        timestamp_us: 1_700_000_000_000_000,
+        xid: 0,
+        table: TableId {
+            schema: "demo".into(),
+            name: "items".into(),
+            oid: 0,
+        },
+        op: ChangeOp::Insert,
+        new: Some(
+            vec![
+                ("_id".to_string(), ColumnValue::Text("item1".into())),
+                ("name".to_string(), ColumnValue::Text("Widget".into())),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        old: None,
+        primary_key_columns: vec!["_id".into()],
+    };
+
+    sink.write_batch(&[event]).await.unwrap();
+    sink.flush().await.unwrap();
+
+    let exists: bool = client
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'items'
+                   AND column_name = 'nickname'
+             )",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    assert!(
+        exists,
+        "a field missing from one MongoDB batch must not drop the target column"
+    );
+}

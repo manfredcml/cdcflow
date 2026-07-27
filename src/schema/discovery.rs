@@ -346,8 +346,64 @@ async fn fetch_column_subset_mysql(
     Ok(result)
 }
 
-/// Number of documents sampled to infer a MongoDB collection's schema.
 const SCHEMA_SAMPLE_SIZE: i64 = 100;
+
+/// Cached clients keyed by connection string — discovery runs per write batch,
+/// and building a `mongodb::Client` re-runs topology discovery each time.
+static MONGO_CLIENTS: std::sync::OnceLock<
+    tokio::sync::Mutex<std::collections::HashMap<String, mongodb::Client>>,
+> = std::sync::OnceLock::new();
+
+async fn mongodb_client(url: &str) -> Result<mongodb::Client> {
+    let mut clients = MONGO_CLIENTS
+        .get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .await;
+
+    if let Some(client) = clients.get(url) {
+        return Ok(client.clone());
+    }
+
+    let client = mongodb::Client::with_uri_str(url)
+        .await
+        .map_err(|e| CdcError::Schema(format!("mongodb connect: {e}")))?;
+    clients.insert(url.to_string(), client.clone());
+    Ok(client)
+}
+
+/// Sample documents from both ends of a collection and merge their field types.
+///
+/// Callers treat the result as the current source schema, so both ends matter:
+/// the newest documents carry fields added later, the oldest carry fields only
+/// they still have. Sorted by `_id` to keep the sample stable across runs.
+async fn sample_field_types(
+    coll: &mongodb::Collection<mongodb::bson::Document>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    use futures_util::StreamExt;
+    use mongodb::bson::doc;
+
+    let mut field_types: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
+    for order in [1, -1] {
+        let mut cursor = coll
+            .find(doc! {})
+            .sort(doc! { "_id": order })
+            .limit(SCHEMA_SAMPLE_SIZE / 2)
+            .await
+            .map_err(|e| CdcError::Schema(format!("mongodb find: {e}")))?;
+
+        while let Some(result) = cursor.next().await {
+            let doc = result.map_err(|e| CdcError::Schema(format!("mongodb cursor: {e}")))?;
+            crate::source::mongodb::bson_mapping::merge_document_field_types(
+                &mut field_types,
+                &doc,
+            );
+        }
+    }
+
+    Ok(field_types)
+}
 
 /// Fetch columns by sampling documents from a MongoDB collection.
 ///
@@ -360,32 +416,11 @@ async fn fetch_columns_mongodb(
     database: &str,
     collection: &str,
 ) -> Result<Vec<ColumnInfo>> {
-    use mongodb::bson::doc;
-
-    let client = mongodb::Client::with_uri_str(url)
-        .await
-        .map_err(|e| CdcError::Schema(format!("mongodb connect: {e}")))?;
-
+    let client = mongodb_client(url).await?;
     let db = client.database(database);
     let coll = db.collection::<mongodb::bson::Document>(collection);
 
-    // Sort by `_id` so repeated runs sample the same documents and infer a
-    // stable schema instead of whatever the server happens to return first.
-    let mut cursor = coll
-        .find(doc! {})
-        .sort(doc! { "_id": 1 })
-        .limit(SCHEMA_SAMPLE_SIZE)
-        .await
-        .map_err(|e| CdcError::Schema(format!("mongodb find: {e}")))?;
-
-    let mut field_types: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
-
-    use futures_util::StreamExt;
-    while let Some(result) = cursor.next().await {
-        let doc = result.map_err(|e| CdcError::Schema(format!("mongodb cursor: {e}")))?;
-        crate::source::mongodb::bson_mapping::merge_document_field_types(&mut field_types, &doc);
-    }
+    let field_types = sample_field_types(&coll).await?;
 
     let dialect = SourceDialect::Mongodb;
     let columns: Vec<ColumnInfo> = field_types

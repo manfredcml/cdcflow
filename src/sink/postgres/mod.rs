@@ -496,7 +496,11 @@ impl PostgresSink {
 
                 if !missing_from_events.is_empty() {
                     // Confirm the drop by querying the source database
-                    if let Some(source_conn) = self.source_connection.as_ref() {
+                    if let Some(source_conn) = self
+                        .source_connection
+                        .as_ref()
+                        .filter(|c| crate::schema::evolution::source_supports_column_drops(c))
+                    {
                         let source_cols =
                             crate::schema::discovery::fetch_columns(source_conn, schema, table)
                                 .await?;

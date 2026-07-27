@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use mongodb::bson::{doc, Document, Timestamp};
-use mongodb::change_stream::event::ResumeToken;
+use mongodb::change_stream::event::{ChangeStreamEvent, ResumeToken};
+use mongodb::change_stream::ChangeStream;
 use mongodb::options::FullDocumentBeforeChangeType;
 use mongodb::options::FullDocumentType;
 use mongodb::Client;
@@ -15,11 +16,9 @@ use super::event_converter::{change_event_to_cdc_event, ConvertResult};
 use super::offset::MongoOffset;
 use super::{send_event, SendOutcome};
 
-/// Max change events buffered before forcing an offset commit.
 const MAX_EVENTS_PER_COMMIT: usize = 1000;
 
-/// How long a `getMore` waits server-side for new events before returning empty.
-/// Bounds the latency of the commit that flushes a partially filled batch.
+/// Server-side wait for new events; bounds partial-batch commit latency.
 const MAX_AWAIT_TIME: Duration = Duration::from_millis(500);
 
 /// Determines where to start the change stream from.
@@ -30,26 +29,16 @@ pub enum ResumePoint {
     Token(ResumeToken),
 }
 
-/// Run the change stream loop, sending CDC events to the pipeline.
-///
-/// Supports filtering to specific collections via a `$match` pipeline stage.
-/// Uses `fullDocument: "updateLookup"` to get the full document on updates,
-/// and `fullDocumentBeforeChange: "whenAvailable"` to capture pre-images.
-///
-/// Events are drained batch-by-batch: a `Commit` carrying the latest resume
-/// token is emitted once a server batch is exhausted (or after
-/// `MAX_EVENTS_PER_COMMIT` events), rather than once per document.
-pub async fn run_change_stream(
+/// Uses `updateLookup` for the post-image and `whenAvailable` for the
+/// pre-image; `collections` becomes a `$match` stage.
+pub async fn open_change_stream(
     client: &Client,
     database: &str,
     collections: &[String],
-    resume_point: ResumePoint,
-    sender: &mpsc::Sender<SourceEvent>,
-    shutdown: &CancellationToken,
-) -> Result<()> {
+    resume_point: &ResumePoint,
+) -> Result<ChangeStream<ChangeStreamEvent<Document>>> {
     let db = client.database(database);
 
-    // Build pipeline to filter collections if specified
     let pipeline: Vec<Document> = if collections.is_empty() {
         vec![]
     } else {
@@ -67,7 +56,7 @@ pub async fn run_change_stream(
         .full_document_before_change(FullDocumentBeforeChangeType::WhenAvailable)
         .max_await_time(MAX_AWAIT_TIME);
 
-    match &resume_point {
+    match resume_point {
         ResumePoint::AfterSnapshot { snapshot_time } => {
             builder = builder.start_at_operation_time(*snapshot_time);
         }
@@ -76,13 +65,31 @@ pub async fn run_change_stream(
         }
     }
 
-    let mut stream = builder
+    builder
         .await
-        .map_err(|e| CdcError::Mongodb(format!("failed to open change stream: {e}")))?;
+        .map_err(|e| CdcError::Mongodb(format!("failed to open change stream: {e}")))
+}
 
+/// True if the start position has aged out of the oplog — it can never become
+/// valid again, so the only way forward is a fresh snapshot.
+pub fn is_resume_point_lost(err: &CdcError) -> bool {
+    let msg = err.to_string();
+    msg.contains("ChangeStreamHistoryLost")
+        || msg.contains("resume point may no longer be in the oplog")
+        || msg.contains("as the resume point may no longer be in the oplog")
+        || msg.contains("resume of change stream was not possible")
+}
+
+/// Commits the latest resume token once a server batch is drained (or after
+/// `MAX_EVENTS_PER_COMMIT` events), not once per document.
+pub async fn pump_change_stream(
+    stream: &mut ChangeStream<ChangeStreamEvent<Document>>,
+    database: &str,
+    sender: &mpsc::Sender<SourceEvent>,
+    shutdown: &CancellationToken,
+) -> Result<()> {
     tracing::info!(database, "change stream started");
 
-    // Latest resume token not yet committed, and how many events it covers.
     let mut pending_offset: Option<String> = None;
     let mut pending_events: usize = 0;
 
@@ -93,17 +100,23 @@ pub async fn run_change_stream(
                 commit_pending(sender, &mut pending_offset, &mut pending_events, shutdown).await?;
                 return Ok(());
             }
-            // `next_if_any` performs at most one `getMore`, so an empty result
-            // means the current batch is drained — the point at which the driver
-            // documentation recommends persisting the resume token.
+            // At most one `getMore`: an empty result means the batch is drained.
             next = stream.next_if_any() => next,
         };
 
         match next {
             Ok(Some(event)) => {
-                // Track the token even for skipped events so the stream position
-                // still advances past operations we do not forward.
-                let offset = MongoOffset::Token(event.id.clone()).to_json()?;
+                // Skipped events still advance the position — except
+                // `invalidate`, which the server refuses in `resumeAfter`.
+                let is_invalidate = matches!(
+                    event.operation_type,
+                    mongodb::change_stream::event::OperationType::Invalidate
+                );
+                let offset = if is_invalidate {
+                    None
+                } else {
+                    Some(MongoOffset::Token(event.id.clone()).to_json()?)
+                };
 
                 match change_event_to_cdc_event(&event, database)? {
                     ConvertResult::Event(cdc_event) => {
@@ -118,7 +131,9 @@ pub async fn run_change_stream(
                     }
                 }
 
-                pending_offset = Some(offset);
+                if let Some(offset) = offset {
+                    pending_offset = Some(offset);
+                }
                 pending_events += 1;
 
                 if pending_events >= MAX_EVENTS_PER_COMMIT {
@@ -127,7 +142,14 @@ pub async fn run_change_stream(
                 }
             }
             Ok(None) => {
-                // Batch drained: commit what we have, then check the stream is alive.
+                // With no event token (idle or fully filtered stream), the
+                // stream's own token keeps the offset from ageing out.
+                if pending_offset.is_none() && stream.is_alive() {
+                    if let Some(token) = stream.resume_token() {
+                        pending_offset = Some(MongoOffset::Token(token).to_json()?);
+                    }
+                }
+
                 commit_pending(sender, &mut pending_offset, &mut pending_events, shutdown).await?;
 
                 if !stream.is_alive() {
@@ -145,7 +167,6 @@ pub async fn run_change_stream(
     }
 }
 
-/// Emit a `Commit` for the pending resume token, if any.
 async fn commit_pending(
     sender: &mpsc::Sender<SourceEvent>,
     pending_offset: &mut Option<String>,
@@ -157,4 +178,40 @@ async fn commit_pending(
     }
     *pending_events = 0;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lost_resume_point_errors_are_recognized() {
+        let cases = [
+            "failed to open change stream: Kind: Command failed: Error code 286 \
+             (ChangeStreamHistoryLost)",
+            "failed to open change stream: resume of change stream was not possible, as the \
+             resume point may no longer be in the oplog",
+        ];
+        for msg in cases {
+            assert!(
+                is_resume_point_lost(&CdcError::Mongodb(msg.into())),
+                "expected a lost resume point for: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_other_errors_are_not_treated_as_lost_resume_points() {
+        let cases = [
+            "failed to open change stream: connection refused",
+            "change stream error: not authorized on demo to execute command",
+            "failed to parse stored offset",
+        ];
+        for msg in cases {
+            assert!(
+                !is_resume_point_lost(&CdcError::Mongodb(msg.into())),
+                "did not expect a lost resume point for: {msg}"
+            );
+        }
+    }
 }

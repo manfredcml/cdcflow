@@ -10,20 +10,14 @@ use super::bson_mapping::document_to_row;
 pub enum ConvertResult {
     /// A CDC event to send downstream.
     Event(CdcEvent),
-    /// Skip this event (unsupported operation type, or a CRUD event whose
-    /// document could no longer be looked up).
+    /// Unsupported operation, or a CRUD event with no usable row.
     Skip,
 }
 
 /// Convert a MongoDB change stream event to a `CdcEvent`.
 ///
-/// Returns `ConvertResult::Event` for insert/update/replace/delete,
-/// `ConvertResult::Skip` for unsupported operations (drop, rename, etc.).
-///
-/// `old` is populated from the pre-image when the collection has
-/// `changeStreamPreAndPostImages` enabled, and otherwise falls back to
-/// `documentKey` so that update/delete events always carry the `_id` primary
-/// key that sinks need to target the right row.
+/// Skips unsupported operations (drop, rename, etc.). `old` comes from the
+/// pre-image, falling back to `documentKey` so update/delete always carry `_id`.
 pub fn change_event_to_cdc_event(
     event: &ChangeStreamEvent<Document>,
     database: &str,
@@ -42,7 +36,7 @@ pub fn change_event_to_cdc_event(
         .and_then(|ns| ns.coll.as_deref())
         .unwrap_or("unknown");
 
-    // Prefer wall time (millisecond resolution) over cluster time (second resolution).
+    // Wall time is millisecond resolution; cluster time only seconds.
     let timestamp_us = event
         .wall_time
         .map(|wt| wt.timestamp_millis() * 1000)
@@ -61,10 +55,8 @@ pub fn change_event_to_cdc_event(
         _ => None,
     };
 
-    // An insert/update/replace with no full document means the document was
-    // removed between the change and the `updateLookup`. A later delete event
-    // covers it, so skip rather than emitting a row-less change that sinks
-    // cannot apply.
+    // No full document: removed before `updateLookup` resolved it. The later
+    // delete event covers it, so skip rather than emit a row-less change.
     if matches!(op, ChangeOp::Insert | ChangeOp::Update) && new.is_none() {
         tracing::warn!(
             collection,
@@ -74,7 +66,6 @@ pub fn change_event_to_cdc_event(
         return Ok(ConvertResult::Skip);
     }
 
-    // A delete with neither pre-image nor documentKey has no way to identify the row.
     if op == ChangeOp::Delete && old.is_none() {
         tracing::warn!(
             collection,

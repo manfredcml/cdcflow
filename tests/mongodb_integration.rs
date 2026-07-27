@@ -556,9 +556,8 @@ where
     assert!(result.is_ok(), "timed out waiting for {label}");
 }
 
-/// Update and delete on a collection **without** `changeStreamPreAndPostImages`
-/// (the MongoDB default) must still carry the `_id` primary key in `old`,
-/// otherwise sinks cannot target the affected row.
+/// Without pre-images (the MongoDB default), update and delete must still
+/// carry `_id` in `old` so sinks can target the row.
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_mongodb_update_and_delete_without_pre_images() {
@@ -658,8 +657,7 @@ async fn test_mongodb_update_and_delete_without_pre_images() {
     let _ = timeout(Duration::from_secs(5), handle).await;
 }
 
-/// Read the deployment's current cluster time, the value a completed snapshot
-/// records in its offset.
+/// Current cluster time — what a completed snapshot records in its offset.
 async fn current_cluster_time(client: &mongodb::Client, database: &str) -> ClusterTime {
     let ping = client
         .database(database)
@@ -673,8 +671,7 @@ async fn current_cluster_time(client: &mongodb::Client, database: &str) -> Clust
     ClusterTime::from(ts)
 }
 
-/// A stored `snapshot_complete` offset must resume the change stream from the
-/// recorded cluster time — not be misread as a resume token, and not re-snapshot.
+/// A `snapshot_complete` offset resumes from its cluster time, no re-snapshot.
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_mongodb_resumes_from_snapshot_complete_offset() {
@@ -746,8 +743,7 @@ async fn test_mongodb_resumes_from_snapshot_complete_offset() {
     let _ = timeout(Duration::from_secs(5), handle).await;
 }
 
-/// A stored `snapshot_in_progress` offset means the previous snapshot was cut
-/// short. Snapshots are not resumable mid-way, so the whole snapshot re-runs.
+/// Snapshots are not resumable mid-way, so `snapshot_in_progress` re-runs it.
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_mongodb_reruns_interrupted_snapshot() {
@@ -803,8 +799,7 @@ async fn test_mongodb_reruns_interrupted_snapshot() {
     let _ = timeout(Duration::from_secs(5), handle).await;
 }
 
-/// An offset the source cannot interpret must fail loudly instead of being
-/// handed to the server as a bogus resume token.
+/// An uninterpretable offset must fail loudly, not become a bogus token.
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_mongodb_rejects_unrecognized_offset() {
@@ -968,8 +963,7 @@ async fn test_mongodb_collection_filter_excludes_others() {
     let _ = timeout(Duration::from_secs(5), handle).await;
 }
 
-/// A shutdown during the snapshot must stop it promptly instead of scanning
-/// every remaining document first.
+/// Shutdown during a snapshot must stop it promptly, mid-scan.
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_mongodb_shutdown_during_snapshot() {
@@ -1022,8 +1016,7 @@ async fn test_mongodb_shutdown_during_snapshot() {
     );
 }
 
-/// End-to-end replication into PostgreSQL with pre-images disabled: inserts,
-/// updates and deletes must all land on the correct target row.
+/// End-to-end replication into PostgreSQL with pre-images disabled.
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn test_mongodb_to_postgres_replication() {
@@ -1177,4 +1170,175 @@ async fn test_mongodb_to_postgres_replication() {
 
     shutdown.cancel();
     let _ = timeout(Duration::from_secs(10), handle).await;
+}
+
+/// A missing collection must fail fast, not run forever replicating nothing.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_rejects_unknown_collection() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("typo_db");
+    db.create_collection("users")
+        .await
+        .expect("failed to create collection");
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "typo_db".into(),
+        collections: vec!["Users".into()], // wrong case
+    };
+
+    let (sink, _events) = CollectorSink::new();
+    let offset_store = MemoryOffsetStore::new();
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+
+    let result = timeout(
+        Duration::from_secs(30),
+        pipeline.run(CancellationToken::new()),
+    )
+    .await
+    .expect("pipeline should fail fast on an unknown collection");
+
+    let err = result.expect_err("an unknown collection must be an error");
+    assert!(
+        err.to_string().contains("not found in database typo_db"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Writes to filtered-out collections must still advance the stored offset,
+/// otherwise it ages out of the oplog while the watched collection is idle.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_offset_advances_while_watched_collection_idle() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("idle_db");
+    for name in ["watched", "busy"] {
+        db.create_collection(name)
+            .await
+            .expect("failed to create collection");
+    }
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "idle_db".into(),
+        collections: vec!["watched".into()],
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let (sink, _events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store.clone());
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    // Let the snapshot finish and the stream open.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let baseline = offset_store.load().await.unwrap();
+
+    // Traffic only on the collection that is filtered out.
+    for i in 0..5 {
+        db.collection::<mongodb::bson::Document>("busy")
+            .insert_one(doc! { "i": i })
+            .await
+            .expect("failed to insert");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    timeout(Duration::from_secs(30), async {
+        loop {
+            let current = offset_store.load().await.unwrap();
+            if current.is_some() && current != baseline {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the offset to advance past the filtered writes");
+
+    let advanced = offset_store.load().await.unwrap().unwrap();
+    assert!(
+        matches!(MongoOffset::from_json(&advanced), Ok(MongoOffset::Token(_))),
+        "expected a resume token offset, got {advanced}"
+    );
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(10), handle).await;
+}
+
+/// Dropping the database ends the stream with an `invalidate` event, whose
+/// token must never be stored: the server refuses it in `resumeAfter`.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_invalidate_token_is_not_persisted() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("dropped_db");
+    db.create_collection("docs")
+        .await
+        .expect("failed to create collection");
+    let coll = db.collection::<mongodb::bson::Document>("docs");
+    coll.insert_one(doc! { "name": "First" })
+        .await
+        .expect("failed to insert");
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "dropped_db".into(),
+        collections: vec![],
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store.clone());
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    {
+        let events = events.clone();
+        wait_until(30, "snapshot", move || !events.lock().unwrap().is_empty()).await;
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    db.drop().await.expect("failed to drop database");
+
+    let result = timeout(Duration::from_secs(30), handle)
+        .await
+        .expect("pipeline should stop after the stream is invalidated")
+        .expect("pipeline task panicked");
+    assert!(
+        result.is_err(),
+        "a server-closed change stream must surface as an error"
+    );
+    shutdown.cancel();
+
+    // Whatever was stored must still be usable as a resume point.
+    let saved = offset_store
+        .load()
+        .await
+        .unwrap()
+        .expect("an offset should have been stored");
+    match MongoOffset::from_json(&saved).expect("stored offset must parse") {
+        MongoOffset::Token(token) => {
+            client
+                .database("dropped_db")
+                .watch()
+                .resume_after(token)
+                .await
+                .expect("stored resume token must be accepted by the server");
+        }
+        MongoOffset::SnapshotComplete { .. } | MongoOffset::SnapshotInProgress { .. } => {}
+    }
 }

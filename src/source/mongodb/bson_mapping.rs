@@ -18,8 +18,7 @@ pub fn bson_to_column_value(bson: &Bson) -> ColumnValue {
         Bson::String(s) => ColumnValue::Text(s.clone()),
         Bson::ObjectId(oid) => ColumnValue::Text(oid.to_hex()),
         Bson::DateTime(dt) => {
-            // Convert millis to ISO 8601 via chrono. `from_timestamp_millis` handles
-            // negative (pre-1970) values correctly — manual secs/nanos splitting does not.
+            // `from_timestamp_millis` handles negative (pre-1970) values.
             let ts = chrono::DateTime::from_timestamp_millis(dt.timestamp_millis())
                 .unwrap_or_default()
                 .to_rfc3339();
@@ -76,17 +75,8 @@ pub fn bson_type_string(bson: &Bson) -> &'static str {
     }
 }
 
-/// Merge two observed BSON type names for the same field into a single type
-/// that can hold both.
-///
-/// MongoDB is schemaless, so the same field can hold different types across
-/// documents. Rules:
-/// - `null` carries no type information — the other type wins.
-/// - Identical types stay as-is.
-/// - Integer widening: `int` + `long` → `long`.
-/// - Numeric widening: any int type + `double` → `double`.
-/// - Anything else conflicting falls back to `string`, which maps to a text
-///   column and can hold any stringified value.
+/// Merge two BSON type names observed for the same field into one that holds
+/// both: nulls carry no type, numerics widen, anything else falls back to text.
 pub fn merge_bson_types(existing: &str, incoming: &str) -> String {
     if existing == incoming {
         return existing.to_string();
@@ -101,8 +91,6 @@ pub fn merge_bson_types(existing: &str, incoming: &str) -> String {
     }
 }
 
-/// Fold a document's top-level fields into an accumulating field → type map,
-/// merging types when a field has already been seen with a different type.
 pub fn merge_document_field_types(field_types: &mut BTreeMap<String, String>, doc: &Document) {
     for (key, value) in doc {
         let incoming = bson_type_string(value);
@@ -117,9 +105,6 @@ pub fn merge_document_field_types(field_types: &mut BTreeMap<String, String>, do
     }
 }
 
-/// Infer schema from a set of documents by building a union of all top-level
-/// fields. Types observed across documents are merged (see [`merge_bson_types`]),
-/// so a field that is null in one document and an int in another is typed `int`.
 pub fn infer_schema_from_documents(docs: &[Document]) -> Vec<(String, String)> {
     let mut field_types: BTreeMap<String, String> = BTreeMap::new();
     for doc in docs {

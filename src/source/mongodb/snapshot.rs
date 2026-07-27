@@ -11,13 +11,10 @@ use super::event_converter::snapshot_doc_to_cdc_event;
 use super::offset::MongoOffset;
 use super::{send_event, SendOutcome};
 
-/// Number of documents between snapshot progress checkpoints.
 const SNAPSHOT_CHECKPOINT_INTERVAL: u64 = 1000;
 
-/// Result of a snapshot operation.
 pub struct SnapshotResult {
-    /// The cluster time recorded before the snapshot started.
-    /// Used to start change stream from the correct point.
+    /// Cluster time recorded before the scan; where the change stream starts.
     pub snapshot_time: Timestamp,
     /// False if the snapshot was interrupted by a shutdown signal.
     pub completed: bool,
@@ -25,14 +22,9 @@ pub struct SnapshotResult {
 
 /// Perform initial snapshot of the specified collections.
 ///
-/// 1. Record the current cluster time via a `ping` command.
-/// 2. Scan each collection with `find({})`.
-/// 3. Send Change + Checkpoint events for each document batch.
-///
-/// Progress checkpoints are tagged `snapshot_in_progress`: snapshots are not
-/// resumable mid-way, so restarting from one re-runs the whole snapshot. The
-/// final checkpoint is tagged `snapshot_complete` and carries the cluster time,
-/// letting a restart skip straight to the change stream.
+/// Records the cluster time via `ping`, then scans each collection with
+/// `find({})`. Progress checkpoints are `snapshot_in_progress`; the final one
+/// is `snapshot_complete` and carries the cluster time to stream from.
 pub async fn perform_snapshot(
     client: &Client,
     database: &str,
@@ -42,7 +34,6 @@ pub async fn perform_snapshot(
 ) -> Result<SnapshotResult> {
     let db = client.database(database);
 
-    // Record cluster time before snapshot
     let ping_result = db
         .run_command(doc! { "ping": 1 })
         .await
@@ -60,7 +51,6 @@ pub async fn perform_snapshot(
         "recorded cluster time for snapshot"
     );
 
-    // Determine collections to snapshot
     let collection_names = if collections.is_empty() {
         db.list_collection_names()
             .await
@@ -132,8 +122,7 @@ pub async fn perform_snapshot(
             }
         }
 
-        // Per-collection checkpoint: the snapshot as a whole is still in progress
-        // until every collection has been scanned.
+        // Still in progress until every collection has been scanned.
         let offset = MongoOffset::SnapshotInProgress {
             collection: coll_name.clone(),
             count,
@@ -151,8 +140,6 @@ pub async fn perform_snapshot(
         tracing::info!(collection = %coll_name, count, "snapshot complete");
     }
 
-    // All collections scanned — record a resumable position so a restart skips
-    // the snapshot and starts the change stream at the recorded cluster time.
     let offset = MongoOffset::SnapshotComplete {
         cluster_time: snapshot_time.into(),
     }

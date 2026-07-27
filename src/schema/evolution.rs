@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::config::SourceConnectionConfig;
 use crate::event::{CdcEvent, ChangeOp};
 
 /// Detect column names present in events but missing from the known column list.
@@ -30,6 +31,14 @@ pub fn detect_new_columns(known_columns: &[String], events: &[&CdcEvent]) -> Vec
     new_cols
 }
 
+/// Whether a column's absence from the source can be treated as a drop.
+///
+/// False for schemaless sources: MongoDB discovery only samples documents, so
+/// absence there would drop live columns and their replicated data.
+pub fn source_supports_column_drops(source_conn: &SourceConnectionConfig) -> bool {
+    !matches!(source_conn, SourceConnectionConfig::Mongodb { .. })
+}
+
 /// Detect target columns that no longer exist in the source.
 ///
 /// Returns column names present in `target_columns` but absent from `source_columns`.
@@ -49,6 +58,29 @@ mod tests {
     use super::*;
     use crate::event::{ColumnValue, Lsn, TableId};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn test_schemaless_sources_never_confirm_column_drops() {
+        assert!(!source_supports_column_drops(
+            &SourceConnectionConfig::Mongodb {
+                url: "mongodb://localhost:27017".into()
+            }
+        ));
+    }
+
+    #[test]
+    fn test_relational_sources_confirm_column_drops() {
+        assert!(source_supports_column_drops(
+            &SourceConnectionConfig::Postgres {
+                url: "postgres://localhost/db".into()
+            }
+        ));
+        assert!(source_supports_column_drops(
+            &SourceConnectionConfig::Mysql {
+                url: "mysql://localhost/db".into()
+            }
+        ));
+    }
 
     fn make_table_id() -> TableId {
         TableId {

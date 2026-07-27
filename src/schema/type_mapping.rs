@@ -147,8 +147,8 @@ fn parse_mysql_type(dt: &str) -> CanonicalType {
 fn parse_mongodb_type(dt: &str) -> CanonicalType {
     match dt {
         "objectid" | "string" => CanonicalType::Text,
-        "int" => CanonicalType::Int,
-        "long" => CanonicalType::BigInt,
+        // Both arrive as ColumnValue::Int(i64); a 32-bit column would truncate.
+        "int" | "long" => CanonicalType::BigInt,
         "double" => CanonicalType::Double,
         "bool" => CanonicalType::Boolean,
         "date" => CanonicalType::TimestampTz,
@@ -526,7 +526,7 @@ mod tests {
         let cases = vec![
             ("objectid", CanonicalType::Text),
             ("string", CanonicalType::Text),
-            ("int", CanonicalType::Int),
+            ("int", CanonicalType::BigInt),
             ("long", CanonicalType::BigInt),
             ("double", CanonicalType::Double),
             ("bool", CanonicalType::Boolean),
@@ -558,7 +558,7 @@ mod tests {
         );
         assert_eq!(
             parse_source_type(SourceDialect::Mongodb, "Int"),
-            CanonicalType::Int
+            CanonicalType::BigInt
         );
     }
 

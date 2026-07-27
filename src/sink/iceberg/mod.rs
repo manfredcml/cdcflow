@@ -362,6 +362,16 @@ impl IcebergSink {
             schema_evolution::detect_dropped_columns_from_events(arrow_schema, events, false);
 
         if has_full_row_events && !missing_from_events.is_empty() {
+            if !crate::schema::evolution::source_supports_column_drops(&self.source_connection) {
+                tracing::debug!(
+                    schema = source_schema,
+                    table = source_table,
+                    ?missing_from_events,
+                    "schemaless source: keeping columns missing from events",
+                );
+                return Ok(());
+            }
+
             tracing::debug!(
                 schema = source_schema,
                 table = source_table,
