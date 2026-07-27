@@ -1,4 +1,5 @@
-use futures_util::StreamExt;
+use std::time::Duration;
+
 use mongodb::bson::{doc, Document, Timestamp};
 use mongodb::change_stream::event::ResumeToken;
 use mongodb::options::FullDocumentBeforeChangeType;
@@ -10,7 +11,16 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{CdcError, Result};
 use crate::source::SourceEvent;
 
-use super::event_converter::{change_event_to_cdc_event, serialize_resume_token, ConvertResult};
+use super::event_converter::{change_event_to_cdc_event, ConvertResult};
+use super::offset::MongoOffset;
+use super::{send_event, SendOutcome};
+
+/// Max change events buffered before forcing an offset commit.
+const MAX_EVENTS_PER_COMMIT: usize = 1000;
+
+/// How long a `getMore` waits server-side for new events before returning empty.
+/// Bounds the latency of the commit that flushes a partially filled batch.
+const MAX_AWAIT_TIME: Duration = Duration::from_millis(500);
 
 /// Determines where to start the change stream from.
 pub enum ResumePoint {
@@ -25,6 +35,10 @@ pub enum ResumePoint {
 /// Supports filtering to specific collections via a `$match` pipeline stage.
 /// Uses `fullDocument: "updateLookup"` to get the full document on updates,
 /// and `fullDocumentBeforeChange: "whenAvailable"` to capture pre-images.
+///
+/// Events are drained batch-by-batch: a `Commit` carrying the latest resume
+/// token is emitted once a server batch is exhausted (or after
+/// `MAX_EVENTS_PER_COMMIT` events), rather than once per document.
 pub async fn run_change_stream(
     client: &Client,
     database: &str,
@@ -50,7 +64,8 @@ pub async fn run_change_stream(
         .watch()
         .pipeline(pipeline)
         .full_document(FullDocumentType::UpdateLookup)
-        .full_document_before_change(FullDocumentBeforeChangeType::WhenAvailable);
+        .full_document_before_change(FullDocumentBeforeChangeType::WhenAvailable)
+        .max_await_time(MAX_AWAIT_TIME);
 
     match &resume_point {
         ResumePoint::AfterSnapshot { snapshot_time } => {
@@ -67,44 +82,79 @@ pub async fn run_change_stream(
 
     tracing::info!(database, "change stream started");
 
+    // Latest resume token not yet committed, and how many events it covers.
+    let mut pending_offset: Option<String> = None;
+    let mut pending_events: usize = 0;
+
     loop {
-        tokio::select! {
+        let next = tokio::select! {
             _ = shutdown.cancelled() => {
                 tracing::info!("shutdown received, stopping change stream");
+                commit_pending(sender, &mut pending_offset, &mut pending_events, shutdown).await?;
                 return Ok(());
             }
-            next = stream.next() => {
-                match next {
-                    Some(Ok(event)) => {
-                        match change_event_to_cdc_event(&event, database)? {
-                            ConvertResult::Event(cdc_event) => {
-                                sender
-                                    .send(SourceEvent::Change(cdc_event))
-                                    .await
-                                    .map_err(|e| CdcError::Mongodb(format!("failed to send change event: {e}")))?;
+            // `next_if_any` performs at most one `getMore`, so an empty result
+            // means the current batch is drained — the point at which the driver
+            // documentation recommends persisting the resume token.
+            next = stream.next_if_any() => next,
+        };
 
-                                // Send commit with resume token as offset
-                                let offset = serialize_resume_token(&event.id)?;
-                                sender
-                                    .send(SourceEvent::Commit { offset })
-                                    .await
-                                    .map_err(|e| CdcError::Mongodb(format!("failed to send commit: {e}")))?;
-                            }
-                            ConvertResult::Skip => {
-                                tracing::debug!(op_type = ?event.operation_type, "skipping unsupported change event");
-                            }
-                            ConvertResult::Commit { .. } => {}
+        match next {
+            Ok(Some(event)) => {
+                // Track the token even for skipped events so the stream position
+                // still advances past operations we do not forward.
+                let offset = MongoOffset::Token(event.id.clone()).to_json()?;
+
+                match change_event_to_cdc_event(&event, database)? {
+                    ConvertResult::Event(cdc_event) => {
+                        if let SendOutcome::ShuttingDown =
+                            send_event(sender, SourceEvent::Change(cdc_event), shutdown).await?
+                        {
+                            return Ok(());
                         }
                     }
-                    Some(Err(e)) => {
-                        return Err(CdcError::Mongodb(format!("change stream error: {e}")));
-                    }
-                    None => {
-                        tracing::warn!("change stream ended unexpectedly");
-                        return Ok(());
+                    ConvertResult::Skip => {
+                        tracing::debug!(op_type = ?event.operation_type, "skipping unsupported change event");
                     }
                 }
+
+                pending_offset = Some(offset);
+                pending_events += 1;
+
+                if pending_events >= MAX_EVENTS_PER_COMMIT {
+                    commit_pending(sender, &mut pending_offset, &mut pending_events, shutdown)
+                        .await?;
+                }
+            }
+            Ok(None) => {
+                // Batch drained: commit what we have, then check the stream is alive.
+                commit_pending(sender, &mut pending_offset, &mut pending_events, shutdown).await?;
+
+                if !stream.is_alive() {
+                    return Err(CdcError::Mongodb(
+                        "change stream closed by the server (the database or a watched collection \
+                         was likely dropped or renamed)"
+                            .into(),
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(CdcError::Mongodb(format!("change stream error: {e}")));
             }
         }
     }
+}
+
+/// Emit a `Commit` for the pending resume token, if any.
+async fn commit_pending(
+    sender: &mpsc::Sender<SourceEvent>,
+    pending_offset: &mut Option<String>,
+    pending_events: &mut usize,
+    shutdown: &CancellationToken,
+) -> Result<()> {
+    if let Some(offset) = pending_offset.take() {
+        send_event(sender, SourceEvent::Commit { offset }, shutdown).await?;
+    }
+    *pending_events = 0;
+    Ok(())
 }

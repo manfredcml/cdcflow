@@ -1,6 +1,7 @@
 pub mod bson_mapping;
 pub mod change_stream;
 pub mod event_converter;
+pub mod offset;
 pub mod snapshot;
 
 use tokio::sync::mpsc;
@@ -12,8 +13,38 @@ use crate::offset::OffsetStore;
 use crate::source::Source;
 
 use self::change_stream::{run_change_stream, ResumePoint};
-use self::event_converter::deserialize_resume_token;
+use self::offset::MongoOffset;
 use self::snapshot::perform_snapshot;
+
+/// Outcome of sending an event to the pipeline.
+pub(crate) enum SendOutcome {
+    Sent,
+    /// The pipeline stopped receiving while a shutdown was in flight.
+    ShuttingDown,
+}
+
+/// Send an event to the pipeline, treating a closed channel during shutdown as
+/// a clean stop rather than an error.
+///
+/// The pipeline's receive loop exits as soon as the shutdown token fires, which
+/// can happen between a source's own cancellation checks and its next send.
+pub(crate) async fn send_event(
+    sender: &mpsc::Sender<crate::source::SourceEvent>,
+    event: crate::source::SourceEvent,
+    shutdown: &CancellationToken,
+) -> Result<SendOutcome> {
+    match sender.send(event).await {
+        Ok(()) => Ok(SendOutcome::Sent),
+        Err(e) => {
+            if shutdown.is_cancelled() {
+                tracing::info!("pipeline stopped receiving during shutdown");
+                Ok(SendOutcome::ShuttingDown)
+            } else {
+                Err(CdcError::Mongodb(format!("failed to send event: {e}")))
+            }
+        }
+    }
+}
 
 /// MongoDB CDC source implementing the Source trait.
 ///
@@ -46,23 +77,47 @@ impl<O: OffsetStore + Sync> Source for MongodbSource<O> {
         // Phase 1: Determine start position (snapshot or resume)
         let saved_offset = self.offset_store.load().await?;
 
-        let resume_point = match saved_offset {
-            Some(offset_str) => {
-                tracing::info!("resuming from saved offset, skipping snapshot");
-                let token = deserialize_resume_token(&offset_str)?;
+        let stored = match saved_offset {
+            Some(offset_str) => Some(MongoOffset::from_json(&offset_str)?),
+            None => None,
+        };
+
+        let resume_point = match stored {
+            Some(MongoOffset::Token(token)) => {
+                tracing::info!("resuming change stream from saved resume token");
                 ResumePoint::Token(token)
             }
-            None => {
-                tracing::info!("no saved offset, performing initial snapshot");
+            Some(MongoOffset::SnapshotComplete { cluster_time }) => {
+                tracing::info!(
+                    cluster_time = %format!("{}:{}", cluster_time.time, cluster_time.increment),
+                    "snapshot already complete, starting change stream at recorded cluster time"
+                );
+                ResumePoint::AfterSnapshot {
+                    snapshot_time: cluster_time.into(),
+                }
+            }
+            other => {
+                match &other {
+                    Some(MongoOffset::SnapshotInProgress { collection, count }) => {
+                        tracing::warn!(
+                            %collection,
+                            count,
+                            "previous snapshot was interrupted; snapshots are not resumable, re-running it"
+                        );
+                    }
+                    _ => tracing::info!("no saved offset, performing initial snapshot"),
+                }
+
                 let result = perform_snapshot(
                     &client,
                     &self.config.database,
                     &self.config.collections,
                     &sender,
+                    &shutdown,
                 )
                 .await?;
 
-                if shutdown.is_cancelled() {
+                if !result.completed {
                     return Ok(());
                 }
 

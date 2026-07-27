@@ -346,11 +346,15 @@ async fn fetch_column_subset_mysql(
     Ok(result)
 }
 
+/// Number of documents sampled to infer a MongoDB collection's schema.
+const SCHEMA_SAMPLE_SIZE: i64 = 100;
+
 /// Fetch columns by sampling documents from a MongoDB collection.
 ///
-/// Since MongoDB is schemaless, we sample up to 100 documents and build a
-/// union of all top-level field names, inferring BSON type from the first
-/// non-null value seen per field.
+/// Since MongoDB is schemaless, we sample up to `SCHEMA_SAMPLE_SIZE` documents
+/// and build a union of all top-level field names. Types observed for the same
+/// field across documents are merged (nulls ignored, numerics widened,
+/// otherwise falling back to text).
 async fn fetch_columns_mongodb(
     url: &str,
     database: &str,
@@ -365,9 +369,12 @@ async fn fetch_columns_mongodb(
     let db = client.database(database);
     let coll = db.collection::<mongodb::bson::Document>(collection);
 
+    // Sort by `_id` so repeated runs sample the same documents and infer a
+    // stable schema instead of whatever the server happens to return first.
     let mut cursor = coll
         .find(doc! {})
-        .limit(100)
+        .sort(doc! { "_id": 1 })
+        .limit(SCHEMA_SAMPLE_SIZE)
         .await
         .map_err(|e| CdcError::Schema(format!("mongodb find: {e}")))?;
 
@@ -377,11 +384,7 @@ async fn fetch_columns_mongodb(
     use futures_util::StreamExt;
     while let Some(result) = cursor.next().await {
         let doc = result.map_err(|e| CdcError::Schema(format!("mongodb cursor: {e}")))?;
-        for (key, value) in &doc {
-            field_types.entry(key.clone()).or_insert_with(|| {
-                crate::source::mongodb::bson_mapping::bson_type_string(value).to_string()
-            });
-        }
+        crate::source::mongodb::bson_mapping::merge_document_field_types(&mut field_types, &doc);
     }
 
     let dialect = SourceDialect::Mongodb;

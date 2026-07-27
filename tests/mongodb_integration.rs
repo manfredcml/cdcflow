@@ -15,13 +15,15 @@ use testcontainers_modules::mongo::Mongo;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use cdcflow::config::MongodbSourceConfig;
+use cdcflow::config::{MongodbSourceConfig, PostgresSinkConfig, SinkMode, SourceConnectionConfig};
 use cdcflow::error::Result;
 use cdcflow::event::{CdcEvent, ChangeOp, ColumnValue};
 use cdcflow::offset::memory::MemoryOffsetStore;
 use cdcflow::offset::OffsetStore;
 use cdcflow::pipeline::Pipeline;
+use cdcflow::sink::postgres::PostgresSink;
 use cdcflow::sink::Sink;
+use cdcflow::source::mongodb::offset::{ClusterTime, MongoOffset};
 use cdcflow::source::mongodb::MongodbSource;
 
 /// A sink that collects events into a shared Vec for assertions.
@@ -109,7 +111,7 @@ async fn start_mongodb() -> (ContainerAsync<Mongo>, String, u16) {
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_secs(1)).await;
         if let Ok(status) = admin_db.run_command(doc! { "replSetGetStatus": 1 }).await {
-            if let Some(members) = status.get_array("members").ok() {
+            if let Ok(members) = status.get_array("members") {
                 for member in members {
                     if let Some(doc) = member.as_document() {
                         if doc.get_str("stateStr").ok() == Some("PRIMARY") {
@@ -535,4 +537,644 @@ async fn test_mongodb_resume_from_offset() {
         shutdown.cancel();
         let _ = timeout(Duration::from_secs(5), handle).await;
     }
+}
+
+/// Poll `check` until it returns true or the timeout expires.
+async fn wait_until<F>(secs: u64, label: &str, mut check: F)
+where
+    F: FnMut() -> bool,
+{
+    let result = timeout(Duration::from_secs(secs), async {
+        loop {
+            if check() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await;
+    assert!(result.is_ok(), "timed out waiting for {label}");
+}
+
+/// Update and delete on a collection **without** `changeStreamPreAndPostImages`
+/// (the MongoDB default) must still carry the `_id` primary key in `old`,
+/// otherwise sinks cannot target the affected row.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_update_and_delete_without_pre_images() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("no_preimage_db");
+    // Deliberately no collMod: pre-images stay disabled.
+    db.create_collection("items")
+        .await
+        .expect("failed to create collection");
+    let coll = db.collection::<mongodb::bson::Document>("items");
+    coll.insert_one(doc! { "_id": "item1", "name": "Widget", "price": 10.0 })
+        .await
+        .expect("failed to insert");
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "no_preimage_db".into(),
+        collections: vec!["items".into()],
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    {
+        let events = events.clone();
+        wait_until(30, "snapshot", move || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.op == ChangeOp::Snapshot)
+        })
+        .await;
+    }
+
+    coll.update_one(doc! { "_id": "item1" }, doc! { "$set": { "price": 15.0 } })
+        .await
+        .expect("failed to update");
+
+    {
+        let events = events.clone();
+        wait_until(20, "update event", move || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.op == ChangeOp::Update)
+        })
+        .await;
+    }
+
+    {
+        let evts = events.lock().unwrap();
+        let update = evts.iter().find(|e| e.op == ChangeOp::Update).unwrap();
+        let old = update
+            .old
+            .as_ref()
+            .expect("update must carry an old row built from documentKey");
+        assert_eq!(old.get("_id"), Some(&ColumnValue::Text("item1".into())));
+    }
+
+    coll.delete_one(doc! { "_id": "item1" })
+        .await
+        .expect("failed to delete");
+
+    {
+        let events = events.clone();
+        wait_until(20, "delete event", move || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.op == ChangeOp::Delete)
+        })
+        .await;
+    }
+
+    {
+        let evts = events.lock().unwrap();
+        let delete = evts.iter().find(|e| e.op == ChangeOp::Delete).unwrap();
+        let old = delete
+            .old
+            .as_ref()
+            .expect("delete must carry an old row built from documentKey");
+        assert_eq!(old.get("_id"), Some(&ColumnValue::Text("item1".into())));
+    }
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(5), handle).await;
+}
+
+/// Read the deployment's current cluster time, the value a completed snapshot
+/// records in its offset.
+async fn current_cluster_time(client: &mongodb::Client, database: &str) -> ClusterTime {
+    let ping = client
+        .database(database)
+        .run_command(doc! { "ping": 1 })
+        .await
+        .expect("ping failed");
+    let ts = ping
+        .get("operationTime")
+        .and_then(|v| v.as_timestamp())
+        .expect("ping response missing operationTime");
+    ClusterTime::from(ts)
+}
+
+/// A stored `snapshot_complete` offset must resume the change stream from the
+/// recorded cluster time — not be misread as a resume token, and not re-snapshot.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_resumes_from_snapshot_complete_offset() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("snapshot_only_db");
+    db.create_collection("docs")
+        .await
+        .expect("failed to create collection");
+    let coll = db.collection::<mongodb::bson::Document>("docs");
+    coll.insert_one(doc! { "name": "BeforeOffset" })
+        .await
+        .expect("failed to insert");
+
+    // Exactly what the source persists once a snapshot finishes with no change
+    // events behind it.
+    let cluster_time = current_cluster_time(&client, "snapshot_only_db").await;
+    let offset_store = MemoryOffsetStore::with_offset(
+        MongoOffset::SnapshotComplete { cluster_time }
+            .to_json()
+            .unwrap(),
+    );
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "snapshot_only_db".into(),
+        collections: vec!["docs".into()],
+    };
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    // Written after the recorded cluster time, so it must arrive on the stream.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    coll.insert_one(doc! { "name": "AfterOffset" })
+        .await
+        .expect("failed to insert");
+
+    {
+        let events = events.clone();
+        wait_until(30, "AfterOffset insert", move || {
+            events.lock().unwrap().iter().any(|e| {
+                e.op == ChangeOp::Insert
+                    && e.new
+                        .as_ref()
+                        .and_then(|r| r.get("name"))
+                        .map(|v| matches!(v, ColumnValue::Text(s) if s == "AfterOffset"))
+                        .unwrap_or(false)
+            })
+        })
+        .await;
+    }
+
+    {
+        let evts = events.lock().unwrap();
+        assert_eq!(
+            evts.iter().filter(|e| e.op == ChangeOp::Snapshot).count(),
+            0,
+            "a completed snapshot must not be re-run on restart"
+        );
+    }
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(5), handle).await;
+}
+
+/// A stored `snapshot_in_progress` offset means the previous snapshot was cut
+/// short. Snapshots are not resumable mid-way, so the whole snapshot re-runs.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_reruns_interrupted_snapshot() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("interrupted_db");
+    db.create_collection("docs")
+        .await
+        .expect("failed to create collection");
+    db.collection::<mongodb::bson::Document>("docs")
+        .insert_many(vec![doc! { "name": "A" }, doc! { "name": "B" }])
+        .await
+        .expect("failed to insert");
+
+    let offset_store = MemoryOffsetStore::with_offset(
+        MongoOffset::SnapshotInProgress {
+            collection: "docs".into(),
+            count: 1,
+        }
+        .to_json()
+        .unwrap(),
+    );
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "interrupted_db".into(),
+        collections: vec!["docs".into()],
+    };
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    {
+        let events = events.clone();
+        wait_until(30, "re-run snapshot of both documents", move || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.op == ChangeOp::Snapshot)
+                .count()
+                >= 2
+        })
+        .await;
+    }
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(5), handle).await;
+}
+
+/// An offset the source cannot interpret must fail loudly instead of being
+/// handed to the server as a bogus resume token.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_rejects_unrecognized_offset() {
+    let (_container, host, port) = start_mongodb().await;
+
+    let offset_store =
+        MemoryOffsetStore::with_offset(r#"{"snapshot_complete":"docs","count":42}"#.to_string());
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "whatever_db".into(),
+        collections: vec![],
+    };
+    let (sink, _events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+
+    let result = timeout(Duration::from_secs(30), pipeline.run(shutdown))
+        .await
+        .expect("pipeline should fail fast on an unreadable offset");
+
+    let err = result.expect_err("an unreadable offset must be an error");
+    assert!(
+        err.to_string().contains("failed to parse stored offset"),
+        "unexpected error: {err}"
+    );
+}
+
+/// An empty `collections` list snapshots and streams every collection in the database.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_all_collections_when_filter_empty() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("all_colls_db");
+    for name in ["alpha", "beta"] {
+        db.create_collection(name)
+            .await
+            .expect("failed to create collection");
+        db.collection::<mongodb::bson::Document>(name)
+            .insert_one(doc! { "name": name })
+            .await
+            .expect("failed to insert");
+    }
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "all_colls_db".into(),
+        collections: vec![], // all collections
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    {
+        let events = events.clone();
+        wait_until(30, "snapshot of both collections", move || {
+            let evts = events.lock().unwrap();
+            let tables: std::collections::HashSet<String> = evts
+                .iter()
+                .filter(|e| e.op == ChangeOp::Snapshot)
+                .map(|e| e.table.name.clone())
+                .collect();
+            tables.contains("alpha") && tables.contains("beta")
+        })
+        .await;
+    }
+
+    // A change in either collection must stream through too.
+    db.collection::<mongodb::bson::Document>("beta")
+        .insert_one(doc! { "name": "beta2" })
+        .await
+        .expect("failed to insert");
+
+    {
+        let events = events.clone();
+        wait_until(20, "streamed insert on beta", move || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.op == ChangeOp::Insert && e.table.name == "beta")
+        })
+        .await;
+    }
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(5), handle).await;
+}
+
+/// A non-empty `collections` list must exclude changes from other collections.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_collection_filter_excludes_others() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("filter_db");
+    for name in ["watched", "ignored"] {
+        db.create_collection(name)
+            .await
+            .expect("failed to create collection");
+    }
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "filter_db".into(),
+        collections: vec!["watched".into()],
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    // Give the change stream time to open before writing.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    db.collection::<mongodb::bson::Document>("ignored")
+        .insert_one(doc! { "name": "nope" })
+        .await
+        .expect("failed to insert");
+    db.collection::<mongodb::bson::Document>("watched")
+        .insert_one(doc! { "name": "yes" })
+        .await
+        .expect("failed to insert");
+
+    {
+        let events = events.clone();
+        wait_until(20, "insert on watched collection", move || {
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.op == ChangeOp::Insert && e.table.name == "watched")
+        })
+        .await;
+    }
+
+    {
+        let evts = events.lock().unwrap();
+        assert!(
+            evts.iter().all(|e| e.table.name != "ignored"),
+            "events from unwatched collections must be filtered out"
+        );
+    }
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(5), handle).await;
+}
+
+/// A shutdown during the snapshot must stop it promptly instead of scanning
+/// every remaining document first.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_shutdown_during_snapshot() {
+    let (_container, host, port) = start_mongodb().await;
+    let client = get_client(&host, port).await;
+
+    let db = client.database("big_snapshot_db");
+    let coll = db.collection::<mongodb::bson::Document>("many");
+    let docs: Vec<mongodb::bson::Document> = (0..20_000)
+        .map(|i| doc! { "i": i, "payload": "x".repeat(200) })
+        .collect();
+    coll.insert_many(docs).await.expect("failed to seed docs");
+
+    let config = MongodbSourceConfig {
+        connection_string: connection_string(&host, port),
+        database: "big_snapshot_db".into(),
+        collections: vec!["many".into()],
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let (sink, events) = CollectorSink::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    // Wait until the snapshot is clearly underway, then cancel mid-scan.
+    {
+        let events = events.clone();
+        wait_until(30, "snapshot to start", move || {
+            !events.lock().unwrap().is_empty()
+        })
+        .await;
+    }
+    shutdown.cancel();
+
+    let result = timeout(Duration::from_secs(10), handle)
+        .await
+        .expect("pipeline did not stop within 10s of cancellation");
+    result
+        .expect("pipeline task panicked")
+        .expect("pipeline returned an error");
+
+    let seen = events.lock().unwrap().len();
+    assert!(
+        seen < 20_000,
+        "snapshot should have been interrupted, but emitted all {seen} documents"
+    );
+}
+
+/// End-to-end replication into PostgreSQL with pre-images disabled: inserts,
+/// updates and deletes must all land on the correct target row.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_mongodb_to_postgres_replication() {
+    use testcontainers_modules::postgres::Postgres;
+    use tokio_postgres::NoTls;
+
+    let (_mongo, mongo_host, mongo_port) = start_mongodb().await;
+    let pg_container = Postgres::default()
+        .with_tag("18-alpine")
+        .start()
+        .await
+        .expect("failed to start postgres container");
+    let pg_port = pg_container
+        .get_host_port_ipv4(5432)
+        .await
+        .expect("failed to get pg port");
+    let pg_host = pg_container
+        .get_host()
+        .await
+        .expect("failed to get pg host")
+        .to_string();
+
+    let mongo_client = get_client(&mongo_host, mongo_port).await;
+    let db = mongo_client.database("repl_db");
+    db.create_collection("users")
+        .await
+        .expect("failed to create collection");
+    let coll = db.collection::<mongodb::bson::Document>("users");
+    coll.insert_many(vec![
+        doc! { "_id": "u1", "name": "Alice", "age": 30 },
+        doc! { "_id": "u2", "name": "Bob", "age": 25 },
+    ])
+    .await
+    .expect("failed to seed docs");
+
+    let mongo_conn = connection_string(&mongo_host, mongo_port);
+    let sink = PostgresSink::new(
+        PostgresSinkConfig {
+            host: pg_host.clone(),
+            port: pg_port,
+            user: "postgres".into(),
+            password: Some("postgres".into()),
+            database: "postgres".into(),
+            schema: "public".into(),
+            table_prefix: "".into(),
+        },
+        SinkMode::Replication,
+        Some(SourceConnectionConfig::Mongodb {
+            url: mongo_conn.clone(),
+        }),
+    )
+    .await
+    .expect("failed to create postgres sink");
+
+    let config = MongodbSourceConfig {
+        connection_string: mongo_conn,
+        database: "repl_db".into(),
+        collections: vec!["users".into()],
+    };
+
+    let offset_store = MemoryOffsetStore::new();
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+    let source = MongodbSource::new(config, offset_store.clone());
+    let pipeline = Pipeline::new(source, sink, offset_store);
+    let handle = tokio::spawn(async move { pipeline.run(shutdown_clone).await });
+
+    // Verification client.
+    let (pg, connection) = tokio_postgres::connect(
+        &format!(
+            "host={} port={} user=postgres password=postgres dbname=postgres",
+            pg_host, pg_port
+        ),
+        NoTls,
+    )
+    .await
+    .expect("failed to connect to postgres");
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("pg connection error: {e}");
+        }
+    });
+
+    async fn count_users(pg: &tokio_postgres::Client) -> i64 {
+        pg.query_one("SELECT count(*)::bigint FROM public.users", &[])
+            .await
+            .map(|row| row.get::<_, i64>(0))
+            .unwrap_or(-1)
+    }
+
+    // Snapshot replicated.
+    timeout(Duration::from_secs(60), async {
+        loop {
+            if count_users(&pg).await == 2 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for snapshot rows in postgres");
+
+    // Update (no pre-image available) must update the existing row, not add one.
+    coll.update_one(doc! { "_id": "u1" }, doc! { "$set": { "age": 31 } })
+        .await
+        .expect("failed to update");
+
+    timeout(Duration::from_secs(60), async {
+        loop {
+            let row = pg
+                .query_opt("SELECT age FROM public.users WHERE _id = 'u1'", &[])
+                .await
+                .expect("query failed");
+            if let Some(row) = row {
+                let age: i64 = match row.try_get::<_, i64>(0) {
+                    Ok(v) => v,
+                    Err(_) => row.get::<_, i32>(0) as i64,
+                };
+                if age == 31 && count_users(&pg).await == 2 {
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the update to replicate");
+
+    // Delete (no pre-image available) must remove the row by its `_id`.
+    coll.delete_one(doc! { "_id": "u2" })
+        .await
+        .expect("failed to delete");
+
+    timeout(Duration::from_secs(60), async {
+        loop {
+            if count_users(&pg).await == 1 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the delete to replicate");
+
+    let remaining: String = pg
+        .query_one("SELECT _id FROM public.users", &[])
+        .await
+        .expect("query failed")
+        .get(0);
+    assert_eq!(remaining, "u1", "the wrong row was deleted");
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(10), handle).await;
 }

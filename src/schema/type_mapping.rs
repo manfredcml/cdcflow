@@ -155,6 +155,8 @@ fn parse_mongodb_type(dt: &str) -> CanonicalType {
         "bindata" => CanonicalType::Binary,
         "object" | "array" => CanonicalType::Json,
         "decimal" => CanonicalType::Text, // Decimal128 has 34 digits precision, store as text
+        // A field that was null in every sampled document carries no type info.
+        "null" => CanonicalType::Text,
         _ => CanonicalType::Text,
     }
 }

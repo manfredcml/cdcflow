@@ -9,11 +9,10 @@
     "type": "postgres",
     "host": "localhost",
     "port": 5433,
-    "user": "postgres",
-    "password": "postgres",
-    "database": "cdc_target",
-    "schema": "public",
-    "table_prefix": ""
+    "user": "cdc_user",
+    "password": "cdc_password",
+    "database": "demo_dest",
+    "schema": "public"
   },
   "offset": {
     "type": "sqlite",

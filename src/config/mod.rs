@@ -57,6 +57,28 @@ pub struct Config {
 mod tests {
     use super::*;
 
+    /// Every shipped example config must deserialize, so a config that drifts
+    /// from the schema (wrong field type, renamed key) fails the build rather
+    /// than only failing when a user runs it.
+    #[test]
+    fn test_example_configs_deserialize() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("example/configs");
+        let mut checked = 0;
+
+        for entry in std::fs::read_dir(&dir).expect("example/configs must exist") {
+            let path = entry.expect("readable dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path).expect("readable config");
+            serde_json::from_str::<Config>(&contents)
+                .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()));
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no example configs found in {}", dir.display());
+    }
+
     #[test]
     fn test_sink_mode_default_is_cdc() {
         let json = r#"{

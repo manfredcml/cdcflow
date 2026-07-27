@@ -37,6 +37,26 @@ checkpoints progress in the offset store. On restart, the pipeline resumes from 
 - **Platform**: Linux and macOS only
 - **CMake**: Required for building the bundled librdkafka (Kafka dependency)
 
+### Source requirements
+
+| Source | Requirements |
+| --- | --- |
+| PostgreSQL | Logical replication (`wal_level=logical`), a replication slot and publication |
+| MySQL | Row-based binlog (`binlog_format=ROW`, `binlog_row_image=FULL`) |
+| MongoDB | Replica set (or sharded cluster) — change streams do not work on standalone `mongod` |
+
+**MongoDB pre-images (optional).** Enabling `changeStreamPreAndPostImages` on a
+collection makes the full "before" row available on updates and deletes:
+
+```js
+db.runCommand({ collMod: "users", changeStreamPreAndPostImages: { enabled: true } });
+```
+
+Without it, update and delete events fall back to the change event's
+`documentKey`, so the `_id` primary key is always captured — replication mode
+still applies updates and deletes correctly, but CDC-mode `old` values contain
+only `_id`.
+
 ## Quick Start - Standalone Mode
 
 The standalone mode runs a single pipeline without the admin server. This is ideal for local testing and development.

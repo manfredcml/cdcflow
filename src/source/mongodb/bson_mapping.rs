@@ -18,11 +18,9 @@ pub fn bson_to_column_value(bson: &Bson) -> ColumnValue {
         Bson::String(s) => ColumnValue::Text(s.clone()),
         Bson::ObjectId(oid) => ColumnValue::Text(oid.to_hex()),
         Bson::DateTime(dt) => {
-            // Convert millis to ISO 8601 via chrono
-            let millis = dt.timestamp_millis();
-            let secs = millis / 1000;
-            let nsecs = ((millis % 1000) * 1_000_000) as u32;
-            let ts = chrono::DateTime::from_timestamp(secs, nsecs)
+            // Convert millis to ISO 8601 via chrono. `from_timestamp_millis` handles
+            // negative (pre-1970) values correctly — manual secs/nanos splitting does not.
+            let ts = chrono::DateTime::from_timestamp_millis(dt.timestamp_millis())
                 .unwrap_or_default()
                 .to_rfc3339();
             ColumnValue::Timestamp(ts)
@@ -78,16 +76,54 @@ pub fn bson_type_string(bson: &Bson) -> &'static str {
     }
 }
 
+/// Merge two observed BSON type names for the same field into a single type
+/// that can hold both.
+///
+/// MongoDB is schemaless, so the same field can hold different types across
+/// documents. Rules:
+/// - `null` carries no type information — the other type wins.
+/// - Identical types stay as-is.
+/// - Integer widening: `int` + `long` → `long`.
+/// - Numeric widening: any int type + `double` → `double`.
+/// - Anything else conflicting falls back to `string`, which maps to a text
+///   column and can hold any stringified value.
+pub fn merge_bson_types(existing: &str, incoming: &str) -> String {
+    if existing == incoming {
+        return existing.to_string();
+    }
+    match (existing, incoming) {
+        ("null", other) | (other, "null") => other.to_string(),
+        ("int", "long") | ("long", "int") => "long".to_string(),
+        ("int", "double") | ("double", "int") => "double".to_string(),
+        ("long", "double") | ("double", "long") => "double".to_string(),
+        ("object", "array") | ("array", "object") => "object".to_string(),
+        _ => "string".to_string(),
+    }
+}
+
+/// Fold a document's top-level fields into an accumulating field → type map,
+/// merging types when a field has already been seen with a different type.
+pub fn merge_document_field_types(field_types: &mut BTreeMap<String, String>, doc: &Document) {
+    for (key, value) in doc {
+        let incoming = bson_type_string(value);
+        match field_types.get_mut(key) {
+            Some(existing) => {
+                *existing = merge_bson_types(existing, incoming);
+            }
+            None => {
+                field_types.insert(key.clone(), incoming.to_string());
+            }
+        }
+    }
+}
+
 /// Infer schema from a set of documents by building a union of all top-level
-/// fields. The type for each field is taken from the first non-null value seen.
+/// fields. Types observed across documents are merged (see [`merge_bson_types`]),
+/// so a field that is null in one document and an int in another is typed `int`.
 pub fn infer_schema_from_documents(docs: &[Document]) -> Vec<(String, String)> {
     let mut field_types: BTreeMap<String, String> = BTreeMap::new();
     for doc in docs {
-        for (key, value) in doc {
-            field_types
-                .entry(key.clone())
-                .or_insert_with(|| bson_type_string(value).to_string());
-        }
+        merge_document_field_types(&mut field_types, doc);
     }
     field_types.into_iter().collect()
 }
@@ -267,5 +303,111 @@ mod tests {
     fn test_infer_schema_empty() {
         let schema = infer_schema_from_documents(&[]);
         assert!(schema.is_empty());
+    }
+
+    #[test]
+    fn test_bson_to_column_value_timestamp() {
+        let ts = mongodb::bson::Timestamp {
+            time: 1700000000,
+            increment: 5,
+        };
+        let result = bson_to_column_value(&Bson::Timestamp(ts));
+        assert_eq!(result, ColumnValue::Text("1700000000:5".into()));
+    }
+
+    #[test]
+    fn test_bson_to_column_value_datetime_before_epoch() {
+        // 1969-12-31T23:59:59.500Z — negative millis with a fractional part.
+        let dt = mongodb::bson::DateTime::from_millis(-500);
+        let result = bson_to_column_value(&Bson::DateTime(dt));
+        match result {
+            ColumnValue::Timestamp(s) => {
+                assert!(
+                    s.starts_with("1969-12-31T23:59:59.5"),
+                    "expected a pre-epoch timestamp, got {s}"
+                );
+            }
+            other => panic!("expected Timestamp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bson_to_column_value_min_max_key_fallback() {
+        for bson in [Bson::MinKey, Bson::MaxKey, Bson::Undefined] {
+            assert!(
+                matches!(bson_to_column_value(&bson), ColumnValue::Text(_)),
+                "expected Text fallback for {bson:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bson_to_column_value_empty_binary() {
+        let bin = Binary {
+            subtype: mongodb::bson::spec::BinarySubtype::Generic,
+            bytes: vec![],
+        };
+        assert_eq!(
+            bson_to_column_value(&Bson::Binary(bin)),
+            ColumnValue::Bytes(vec![])
+        );
+    }
+
+    #[test]
+    fn test_merge_bson_types_null_is_ignored() {
+        assert_eq!(merge_bson_types("null", "int"), "int");
+        assert_eq!(merge_bson_types("int", "null"), "int");
+        assert_eq!(merge_bson_types("null", "null"), "null");
+    }
+
+    #[test]
+    fn test_merge_bson_types_numeric_widening() {
+        let cases = vec![
+            (("int", "long"), "long"),
+            (("long", "int"), "long"),
+            (("int", "double"), "double"),
+            (("double", "long"), "double"),
+        ];
+        for ((a, b), expected) in cases {
+            assert_eq!(merge_bson_types(a, b), expected, "for ({a}, {b})");
+        }
+    }
+
+    #[test]
+    fn test_merge_bson_types_conflict_falls_back_to_string() {
+        assert_eq!(merge_bson_types("int", "bool"), "string");
+        assert_eq!(merge_bson_types("date", "objectid"), "string");
+        assert_eq!(merge_bson_types("object", "array"), "object");
+    }
+
+    #[test]
+    fn test_merge_bson_types_identical() {
+        assert_eq!(merge_bson_types("string", "string"), "string");
+    }
+
+    #[test]
+    fn test_infer_schema_ignores_null_when_typing_field() {
+        let docs = vec![doc! { "score": Bson::Null }, doc! { "score": 42i32 }];
+        let schema = infer_schema_from_documents(&docs);
+        assert_eq!(schema, vec![("score".to_string(), "int".to_string())]);
+    }
+
+    #[test]
+    fn test_infer_schema_widens_conflicting_types() {
+        let docs = vec![
+            doc! { "id": 1i32, "v": 1i32 },
+            doc! { "id": "a", "v": 2i64 },
+        ];
+        let type_map: BTreeMap<String, String> =
+            infer_schema_from_documents(&docs).into_iter().collect();
+        assert_eq!(type_map["id"], "string"); // int + string → text column
+        assert_eq!(type_map["v"], "long"); // int + long → long
+    }
+
+    #[test]
+    fn test_infer_schema_all_null_field_stays_null() {
+        let docs = vec![doc! { "x": Bson::Null }, doc! { "x": Bson::Null }];
+        let schema = infer_schema_from_documents(&docs);
+        assert_eq!(schema, vec![("x".to_string(), "null".to_string())]);
     }
 }
