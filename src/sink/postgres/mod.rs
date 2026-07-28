@@ -16,6 +16,7 @@ use schema::{
 };
 
 use crate::schema::value::column_value_to_string;
+use crate::sink::postgres::schema::quote_ident;
 
 /// Cached information about a target table.
 struct TableInfo {
@@ -78,7 +79,11 @@ impl PostgresSink {
         let target_table = format!("{}{}", self.config.table_prefix, source_table);
         // Clone to avoid borrowing self.config while we need &mut self later.
         let target_schema = self.config.schema.clone();
-        let target_fqn = format!("\"{}\".\"{}\"", target_schema, target_table);
+        let target_fqn = format!(
+            "{}.{}",
+            quote_ident(&target_schema),
+            quote_ident(&target_table)
+        );
 
         match self.mode {
             SinkMode::Cdc => {
@@ -370,12 +375,12 @@ impl PostgresSink {
 
                 for col in &info.columns {
                     let val = event.new.as_ref().and_then(|r| r.get(col));
-                    values.push(column_value_to_string(val));
+                    values.push(param_value(val));
                 }
 
                 for col in &info.columns {
                     let val = event.old.as_ref().and_then(|r| r.get(col));
-                    values.push(column_value_to_string(val));
+                    values.push(param_value(val));
                 }
 
                 let params: Vec<&(dyn ToSql + Sync)> =
@@ -628,7 +633,7 @@ fn build_upsert_sql(
     pk_columns: &[String],
     column_types: &HashMap<String, String>,
 ) -> String {
-    let col_list: Vec<String> = columns.iter().map(|c| format!("\"{}\"", c)).collect();
+    let col_list: Vec<String> = columns.iter().map(|c| quote_ident(c)).collect();
     let placeholders: Vec<String> = columns
         .iter()
         .enumerate()
@@ -643,10 +648,10 @@ fn build_upsert_sql(
         .filter(|(_, c)| !pk_columns.contains(c))
         .map(|(i, c)| {
             let typ = column_types.get(c).map(|t| t.as_str()).unwrap_or("text");
-            format!("\"{}\" = ${}::{}", c, i + 1, typ)
+            format!("{} = ${}::{}", quote_ident(c), i + 1, typ)
         })
         .collect();
-    let pk_list: Vec<String> = pk_columns.iter().map(|c| format!("\"{}\"", c)).collect();
+    let pk_list: Vec<String> = pk_columns.iter().map(|c| quote_ident(c)).collect();
 
     if update_sets.is_empty() {
         format!(
@@ -682,7 +687,7 @@ fn build_delete_sql(
         .enumerate()
         .map(|(i, c)| {
             let typ = column_types.get(c).map(|t| t.as_str()).unwrap_or("text");
-            format!("\"{}\" = ${}::{}", c, i + 1, typ)
+            format!("{} = ${}::{}", quote_ident(c), i + 1, typ)
         })
         .collect();
     format!(
@@ -690,6 +695,15 @@ fn build_delete_sql(
         target_fqn,
         where_clauses.join(" AND ")
     )
+}
+
+/// Params go over the wire as TEXT and are cast server-side, so bytes need the
+/// `\x` hex prefix — bare hex is read as the escape format and stored literally.
+fn param_value(value: Option<&ColumnValue>) -> Option<String> {
+    match value {
+        Some(ColumnValue::Bytes(_)) => column_value_to_string(value).map(|hex| format!("\\x{hex}")),
+        _ => column_value_to_string(value),
+    }
 }
 
 /// UPSERT a row: INSERT ... ON CONFLICT (pk) DO UPDATE SET ...
@@ -704,10 +718,7 @@ async fn upsert_row(
 ) -> Result<()> {
     let cols = &info.columns;
 
-    let values: Vec<Option<String>> = cols
-        .iter()
-        .map(|c| crate::schema::value::column_value_to_string(row.get(c)))
-        .collect();
+    let values: Vec<Option<String>> = cols.iter().map(|c| param_value(row.get(c))).collect();
 
     let sql = build_upsert_sql(&info.target_fqn, cols, &info.pk_columns, &info.column_types);
 
@@ -731,10 +742,7 @@ async fn delete_row(
 ) -> Result<()> {
     let pk_cols = &info.pk_columns;
 
-    let pk_values: Vec<Option<String>> = pk_cols
-        .iter()
-        .map(|c| crate::schema::value::column_value_to_string(row.get(c)))
-        .collect();
+    let pk_values: Vec<Option<String>> = pk_cols.iter().map(|c| param_value(row.get(c))).collect();
 
     let sql = build_delete_sql(&info.target_fqn, pk_cols, &info.column_types);
 
@@ -761,6 +769,23 @@ fn connection_string(config: &PostgresSinkConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bytes_param_uses_hex_bytea_literal() {
+        assert_eq!(
+            param_value(Some(&ColumnValue::Bytes(vec![0x68, 0x00, 0xff]))),
+            Some("\\x6800ff".to_string())
+        );
+    }
+
+    #[test]
+    fn test_non_bytes_params_are_unchanged() {
+        assert_eq!(
+            param_value(Some(&ColumnValue::Text("\\x41".into()))),
+            Some("\\x41".to_string())
+        );
+        assert_eq!(param_value(Some(&ColumnValue::Null)), None);
+    }
 
     #[test]
     fn test_connection_string_with_password() {

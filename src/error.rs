@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CdcError {
-    #[error("postgres error: {0}")]
+    #[error("postgres error: {}", format_postgres_error(.0))]
     Postgres(#[from] tokio_postgres::Error),
 
     #[error("protocol error: {0}")]
@@ -46,6 +46,24 @@ pub enum CdcError {
 
     #[error("schema error: {0}")]
     Schema(String),
+}
+
+/// `tokio_postgres::Error` renders server failures as the bare string
+/// "db error" — the useful text only lives in the wrapped `DbError`.
+fn format_postgres_error(err: &tokio_postgres::Error) -> String {
+    match err.as_db_error() {
+        Some(db) => {
+            let mut msg = format!("{}: {}", db.severity(), db.message());
+            if let Some(detail) = db.detail() {
+                msg.push_str(&format!(" (detail: {detail})"));
+            }
+            if let Some(column) = db.column() {
+                msg.push_str(&format!(" (column: {column})"));
+            }
+            msg
+        }
+        None => err.to_string(),
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CdcError>;

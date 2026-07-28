@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{
@@ -74,6 +75,35 @@ pub fn events_to_record_batch(
         .map_err(|e| CdcError::Iceberg(format!("record batch: {e}")))
 }
 
+/// A source value that is present but cannot be represented in the target
+/// column — a schemaless source changed the field's type after the table was
+/// created. Writing NULL would drop the value without a trace.
+fn type_mismatch(col_name: &str, data_type: &DataType, value: &ColumnValue) -> CdcError {
+    CdcError::Iceberg(format!(
+        "column {col_name} is {data_type} but the source sent {} ({}); \
+         the source field type changed and the value cannot be converted",
+        crate::schema::value::column_value_to_string(Some(value)).unwrap_or_default(),
+        crate::schema::value::column_value_type_name(value),
+    ))
+}
+
+fn convert_values<T>(
+    col_name: &str,
+    data_type: &DataType,
+    values: &[Option<&ColumnValue>],
+    convert: impl Fn(&ColumnValue) -> Option<T>,
+) -> Result<Vec<Option<T>>> {
+    values
+        .iter()
+        .map(|v| match v {
+            None | Some(ColumnValue::Null) | Some(ColumnValue::UnchangedToast) => Ok(None),
+            Some(value) => convert(value)
+                .map(Some)
+                .ok_or_else(|| type_mismatch(col_name, data_type, value)),
+        })
+        .collect()
+}
+
 /// Build an Arrow array for a source column from the extracted rows.
 fn build_source_column(
     col_name: &str,
@@ -88,73 +118,58 @@ fn build_source_column(
 
     match data_type {
         DataType::Int32 => {
-            let arr: Int32Array = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Int(n)) => Some(*n as i32),
-                    Some(ColumnValue::Text(s)) => s.parse::<i32>().ok(),
-                    _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Int(n) => i32::try_from(*n).ok(),
+                ColumnValue::Text(s) => s.parse::<i32>().ok(),
+                _ => None,
+            })?;
+            Ok(Arc::new(Int32Array::from(vals)))
         }
         DataType::Int64 => {
-            let arr: Int64Array = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Int(n)) => Some(*n),
-                    Some(ColumnValue::Text(s)) => s.parse::<i64>().ok(),
-                    _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Int(n) => Some(*n),
+                ColumnValue::Text(s) => s.parse::<i64>().ok(),
+                _ => None,
+            })?;
+            Ok(Arc::new(Int64Array::from(vals)))
         }
         DataType::Float32 => {
-            let arr: Float32Array = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Float(f)) => Some(f.into_inner() as f32),
-                    Some(ColumnValue::Int(n)) => Some(*n as f32),
-                    Some(ColumnValue::Text(s)) => s.parse::<f32>().ok(),
-                    _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Float(f) => Some(f.into_inner() as f32),
+                ColumnValue::Int(n) => Some(*n as f32),
+                ColumnValue::Text(s) => s.parse::<f32>().ok(),
+                _ => None,
+            })?;
+            Ok(Arc::new(Float32Array::from(vals)))
         }
         DataType::Float64 => {
-            let arr: Float64Array = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Float(f)) => Some(f.into_inner()),
-                    Some(ColumnValue::Int(n)) => Some(*n as f64),
-                    Some(ColumnValue::Text(s)) => s.parse::<f64>().ok(),
-                    _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Float(f) => Some(f.into_inner()),
+                ColumnValue::Int(n) => Some(*n as f64),
+                ColumnValue::Text(s) => s.parse::<f64>().ok(),
+                _ => None,
+            })?;
+            Ok(Arc::new(Float64Array::from(vals)))
         }
         DataType::Boolean => {
-            let arr: BooleanArray = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Bool(b)) => Some(*b),
-                    Some(ColumnValue::Int(n)) => Some(*n != 0),
-                    Some(ColumnValue::Text(s)) => Some(s == "t" || s == "true" || s == "1"),
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Bool(b) => Some(*b),
+                ColumnValue::Int(n) => Some(*n != 0),
+                ColumnValue::Text(s) => match s.as_str() {
+                    "t" | "true" | "TRUE" | "1" => Some(true),
+                    "f" | "false" | "FALSE" | "0" => Some(false),
                     _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+                },
+                _ => None,
+            })?;
+            Ok(Arc::new(BooleanArray::from(vals)))
         }
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-            let arr: TimestampMicrosecondArray = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Timestamp(s)) | Some(ColumnValue::Text(s)) => {
-                        parse_timestamp_us(s)
-                    }
-                    _ => None,
-                })
-                .collect();
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Timestamp(s) | ColumnValue::Text(s) => parse_timestamp_us(s),
+                _ => None,
+            })?;
+            let arr = TimestampMicrosecondArray::from(vals);
             let arr = match tz {
                 Some(tz) => arr.with_timezone(tz.as_ref()),
                 None => arr,
@@ -162,78 +177,66 @@ fn build_source_column(
             Ok(Arc::new(arr))
         }
         DataType::Date32 => {
-            let arr: Date32Array = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Date(s)) | Some(ColumnValue::Text(s)) => {
-                        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-                            .ok()
-                            .map(|d| {
-                                (d - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-                                    .num_days() as i32
-                            })
-                    }
-                    _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Date(s) | ColumnValue::Text(s) => {
+                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                        .ok()
+                        .map(|d| {
+                            (d - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days()
+                                as i32
+                        })
+                }
+                _ => None,
+            })?;
+            Ok(Arc::new(Date32Array::from(vals)))
         }
         DataType::Decimal128(precision, scale) => {
             let scale_i32 = *scale as i32;
-            let arr: Vec<Option<i128>> = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Text(s)) => parse_decimal_i128(s, scale_i32),
-                    Some(ColumnValue::Float(f)) => {
-                        let multiplier = 10_f64.powi(scale_i32);
-                        Some((f.into_inner() * multiplier).round() as i128)
-                    }
-                    Some(ColumnValue::Int(n)) => {
-                        let multiplier = 10_i128.pow(scale_i32 as u32);
-                        Some(*n as i128 * multiplier)
-                    }
-                    _ => None,
-                })
-                .collect();
-            let arr = Decimal128Array::from(arr)
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Text(s) => parse_decimal_i128(s, scale_i32),
+                ColumnValue::Float(f) => {
+                    let multiplier = 10_f64.powi(scale_i32);
+                    Some((f.into_inner() * multiplier).round() as i128)
+                }
+                ColumnValue::Int(n) => {
+                    let multiplier = 10_i128.pow(scale_i32 as u32);
+                    Some(*n as i128 * multiplier)
+                }
+                _ => None,
+            })?;
+            let arr = Decimal128Array::from(vals)
                 .with_precision_and_scale(*precision, *scale)
                 .map_err(|e| CdcError::Iceberg(format!("decimal array: {e}")))?;
             Ok(Arc::new(arr))
         }
         DataType::Time64(TimeUnit::Microsecond) => {
-            let arr: Time64MicrosecondArray = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Time(s)) | Some(ColumnValue::Text(s)) => parse_time_us(s),
-                    _ => None,
-                })
-                .collect();
-            Ok(Arc::new(arr))
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Time(s) | ColumnValue::Text(s) => parse_time_us(s),
+                _ => None,
+            })?;
+            Ok(Arc::new(Time64MicrosecondArray::from(vals)))
         }
         DataType::LargeBinary => {
-            let arr: LargeBinaryArray = values
+            let vals = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Bytes(b) => Some(b.clone()),
+                _ => None,
+            })?;
+            let arr: LargeBinaryArray = vals
                 .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Bytes(b)) => Some(b.as_slice()),
-                    _ => None,
-                })
+                .map(|v| v.as_ref().map(|b| b.as_slice()))
                 .collect();
             Ok(Arc::new(arr))
         }
         DataType::FixedSizeBinary(16) => {
-            // UUID: parse from string or pass through bytes
-            let byte_values: Vec<Option<[u8; 16]>> = values
-                .iter()
-                .map(|v| match v {
-                    Some(ColumnValue::Text(s)) => parse_uuid_bytes(s),
-                    Some(ColumnValue::Bytes(b)) if b.len() == 16 => {
-                        let mut arr = [0u8; 16];
-                        arr.copy_from_slice(b);
-                        Some(arr)
-                    }
-                    _ => None,
-                })
-                .collect();
+            let byte_values = convert_values(col_name, data_type, &values, |v| match v {
+                ColumnValue::Text(s) => parse_uuid_bytes(s),
+                ColumnValue::Bytes(b) if b.len() == 16 => {
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(b);
+                    Some(arr)
+                }
+                _ => None,
+            })?;
             let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 byte_values.iter().map(|v| v.as_ref().map(|b| b.as_slice())),
                 16,
@@ -332,23 +335,53 @@ pub fn events_to_flattened_cdc_batch(
         .map_err(|e| CdcError::Iceberg(format!("flattened CDC record batch: {e}")))
 }
 
+/// Identity of a row within a batch, or None when the event carries no usable PK.
+fn row_key(event: &CdcEvent) -> Option<Vec<Option<String>>> {
+    let row = event.new.as_ref()?;
+    if event.primary_key_columns.is_empty() {
+        return None;
+    }
+    Some(
+        event
+            .primary_key_columns
+            .iter()
+            .map(|c| crate::schema::value::column_value_to_string(row.get(c)))
+            .collect(),
+    )
+}
+
 /// Convert CDC events into a data RecordBatch for replication mode (source columns only).
 ///
 /// Filters to Insert/Update/Snapshot events and uses `event.new` for row data.
 /// Returns None if no matching events exist.
+///
+/// Only the last event per primary key survives: equality deletes never apply to
+/// data files added by the same commit, so two versions of a key in one batch
+/// would both remain in the table.
 pub fn events_to_replication_data_batch(
     events: &[CdcEvent],
     arrow_schema: &ArrowSchema,
 ) -> Result<Option<RecordBatch>> {
-    let data_events: Vec<&CdcEvent> = events
-        .iter()
-        .filter(|e| {
-            matches!(
-                e.op,
-                ChangeOp::Insert | ChangeOp::Update | ChangeOp::Snapshot
-            )
-        })
-        .collect();
+    let mut data_events: Vec<&CdcEvent> = Vec::new();
+    let mut positions: HashMap<Vec<Option<String>>, usize> = HashMap::new();
+
+    for event in events.iter().filter(|e| {
+        matches!(
+            e.op,
+            ChangeOp::Insert | ChangeOp::Update | ChangeOp::Snapshot
+        )
+    }) {
+        match row_key(event) {
+            Some(key) => match positions.get(&key) {
+                Some(&pos) => data_events[pos] = event,
+                None => {
+                    positions.insert(key, data_events.len());
+                    data_events.push(event);
+                }
+            },
+            None => data_events.push(event),
+        }
+    }
 
     if data_events.is_empty() {
         return Ok(None);
@@ -964,6 +997,119 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(pk.value(0), "[\"id\"]");
+    }
+
+    #[test]
+    fn test_repl_batch_rejects_value_of_wrong_type() {
+        let schema = ArrowSchema::new(vec![Field::new("age", DataType::Int64, true)]);
+
+        let events = vec![CdcEvent {
+            lsn: Lsn(100),
+            timestamp_us: 1_000_000,
+            xid: 1,
+            table: test_table_id(),
+            op: ChangeOp::Insert,
+            new: Some(BTreeMap::from([(
+                "age".into(),
+                ColumnValue::Text("thirty".into()),
+            )])),
+            old: None,
+            primary_key_columns: vec![],
+        }];
+
+        let err = events_to_replication_data_batch(&events, &schema).unwrap_err();
+        assert!(
+            err.to_string().contains("thirty"),
+            "error should name the offending value: {err}"
+        );
+    }
+
+    #[test]
+    fn test_repl_batch_accepts_null_for_typed_column() {
+        let schema = ArrowSchema::new(vec![Field::new("age", DataType::Int64, true)]);
+
+        let events = vec![CdcEvent {
+            lsn: Lsn(100),
+            timestamp_us: 1_000_000,
+            xid: 1,
+            table: test_table_id(),
+            op: ChangeOp::Insert,
+            new: Some(BTreeMap::from([("age".into(), ColumnValue::Null)])),
+            old: None,
+            primary_key_columns: vec![],
+        }];
+
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
+        assert!(batch.column(0).is_null(0));
+    }
+
+    #[test]
+    fn test_repl_batch_keeps_only_last_event_per_pk() {
+        let schema = ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]);
+
+        let event = |op, id: i64, name: &str| CdcEvent {
+            lsn: Lsn(100),
+            timestamp_us: 1_000_000,
+            xid: 1,
+            table: test_table_id(),
+            op,
+            new: Some(BTreeMap::from([
+                ("id".into(), ColumnValue::Int(id)),
+                ("name".into(), ColumnValue::Text(name.into())),
+            ])),
+            old: None,
+            primary_key_columns: vec!["id".into()],
+        };
+
+        let events = vec![
+            event(ChangeOp::Insert, 1, "first"),
+            event(ChangeOp::Update, 1, "second"),
+            event(ChangeOp::Update, 2, "other"),
+            event(ChangeOp::Update, 1, "third"),
+        ];
+
+        let batch = events_to_replication_data_batch(&events, &schema)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(batch.num_rows(), 2);
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(names.value(0), "third");
+        assert_eq!(names.value(1), "other");
+    }
+
+    #[test]
+    fn test_repl_batch_keeps_all_events_without_pk_columns() {
+        let schema = ArrowSchema::new(vec![Field::new("name", DataType::Utf8, true)]);
+
+        let event = |name: &str| CdcEvent {
+            lsn: Lsn(100),
+            timestamp_us: 1_000_000,
+            xid: 1,
+            table: test_table_id(),
+            op: ChangeOp::Insert,
+            new: Some(BTreeMap::from([(
+                "name".into(),
+                ColumnValue::Text(name.into()),
+            )])),
+            old: None,
+            primary_key_columns: vec![],
+        };
+
+        let batch = events_to_replication_data_batch(&[event("a"), event("b")], &schema)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(batch.num_rows(), 2);
     }
 
     // ── Type conversion tests (via replication data batch) ──────────

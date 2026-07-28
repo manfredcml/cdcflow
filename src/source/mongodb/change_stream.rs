@@ -67,7 +67,22 @@ pub async fn open_change_stream(
 
     builder
         .await
-        .map_err(|e| CdcError::Mongodb(format!("failed to open change stream: {e}")))
+        .map_err(|e| stream_error("failed to open change stream", e.to_string()))
+}
+
+/// An update to a large document carries both a post- and a pre-image, so the
+/// event can exceed the 16 MB BSON limit even though each document is legal.
+/// It then replays on every restart, which the driver's own text does not hint at.
+fn stream_error(context: &str, detail: String) -> CdcError {
+    let mut msg = format!("{context}: {detail}");
+    if detail.contains("BSONObjectTooLarge") {
+        msg.push_str(
+            " — the change event exceeded MongoDB's 16 MB limit, most likely an update to a \
+             large document with changeStreamPreAndPostImages enabled. The event replays on \
+             every restart: disable pre-images for the collection and re-snapshot to get past it.",
+        );
+    }
+    CdcError::Mongodb(msg)
 }
 
 /// True if the start position has aged out of the oplog — it can never become
@@ -161,7 +176,7 @@ pub async fn pump_change_stream(
                 }
             }
             Err(e) => {
-                return Err(CdcError::Mongodb(format!("change stream error: {e}")));
+                return Err(stream_error("change stream error", e.to_string()));
             }
         }
     }
@@ -198,6 +213,24 @@ mod tests {
                 "expected a lost resume point for: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn test_oversized_event_error_explains_pre_images() {
+        let err = stream_error(
+            "change stream error",
+            "Error code 10334 (BSONObjectTooLarge): Size 28312133 exceeds maximum 16793600".into(),
+        );
+        assert!(err.to_string().contains("pre-images"), "{err}");
+    }
+
+    #[test]
+    fn test_unrelated_errors_get_no_extra_hint() {
+        let err = stream_error("change stream error", "connection refused".into());
+        assert_eq!(
+            err.to_string(),
+            "mongodb error: change stream error: connection refused"
+        );
     }
 
     #[test]

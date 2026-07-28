@@ -41,9 +41,15 @@ pub fn canonical_to_pg_ddl(ct: &CanonicalType) -> String {
     }
 }
 
+/// Quote an identifier. MongoDB field names may contain `"`, which would
+/// otherwise terminate the quoted identifier and let the rest run as SQL.
+pub fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 /// Build a fully qualified table name: "schema"."table"
 fn build_fqn(schema: &str, table: &str) -> String {
-    format!("\"{}\".\"{}\"", schema, table)
+    format!("{}.{}", quote_ident(schema), quote_ident(table))
 }
 
 /// Build the DDL string for creating a CDC-mode table with flattened typed columns.
@@ -66,11 +72,11 @@ fn build_cdc_table_ddl(schema: &str, table: &str, source_columns: &[(String, Str
     ];
 
     for (name, typ) in source_columns {
-        col_defs.push(format!("\"{}\" {}", name, typ));
+        col_defs.push(format!("{} {}", quote_ident(name), typ));
     }
 
     for (name, typ) in source_columns {
-        col_defs.push(format!("\"_old_{}\" {}", name, typ));
+        col_defs.push(format!("{} {}", quote_ident(&format!("_old_{name}")), typ));
     }
 
     format!(
@@ -112,14 +118,14 @@ fn build_cdc_insert_sql(
     let mut idx = 8;
 
     for col in source_columns {
-        col_names.push(format!("\"{}\"", col));
+        col_names.push(quote_ident(col));
         let typ = column_types.get(col).map(|t| t.as_str()).unwrap_or("text");
         placeholders.push(format!("${}::{}", idx, typ));
         idx += 1;
     }
 
     for col in source_columns {
-        col_names.push(format!("\"_old_{}\"", col));
+        col_names.push(quote_ident(&format!("_old_{col}")));
         let typ = column_types.get(col).map(|t| t.as_str()).unwrap_or("text");
         placeholders.push(format!("${}::{}", idx, typ));
         idx += 1;
@@ -145,9 +151,9 @@ fn build_replication_table_ddl(
     let fqn = build_fqn(schema, table);
     let col_defs: Vec<String> = columns
         .iter()
-        .map(|(name, typ)| format!("\"{}\" {}", name, typ))
+        .map(|(name, typ)| format!("{} {}", quote_ident(name), typ))
         .collect();
-    let pk_list: Vec<String> = pk_columns.iter().map(|c| format!("\"{}\"", c)).collect();
+    let pk_list: Vec<String> = pk_columns.iter().map(|c| quote_ident(c)).collect();
     format!(
         "CREATE TABLE IF NOT EXISTS {} ({}, PRIMARY KEY ({}))",
         fqn,
@@ -163,7 +169,7 @@ fn build_add_columns_ddl(schema: &str, table: &str, new_columns: &[(String, Stri
     let fqn = build_fqn(schema, table);
     let alter_clauses: Vec<String> = new_columns
         .iter()
-        .map(|(name, typ)| format!("ADD COLUMN IF NOT EXISTS \"{}\" {}", name, typ))
+        .map(|(name, typ)| format!("ADD COLUMN IF NOT EXISTS {} {}", quote_ident(name), typ))
         .collect();
     format!("ALTER TABLE {} {}", fqn, alter_clauses.join(", "))
 }
@@ -175,7 +181,7 @@ fn build_drop_columns_ddl(schema: &str, table: &str, columns: &[String]) -> Stri
     let fqn = build_fqn(schema, table);
     let alter_clauses: Vec<String> = columns
         .iter()
-        .map(|name| format!("DROP COLUMN IF EXISTS \"{}\"", name))
+        .map(|name| format!("DROP COLUMN IF EXISTS {}", quote_ident(name)))
         .collect();
     format!("ALTER TABLE {} {}", fqn, alter_clauses.join(", "))
 }
@@ -329,6 +335,27 @@ pub async fn add_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_quote_ident_escapes_embedded_quotes() {
+        assert_eq!(quote_ident("bad\"name"), "\"bad\"\"name\"");
+    }
+
+    #[test]
+    fn test_ddl_with_hostile_field_name_stays_one_identifier() {
+        let ddl = build_cdc_table_ddl(
+            "public",
+            "weird",
+            &[(
+                "x\" text); DROP TABLE t; --".to_string(),
+                "text".to_string(),
+            )],
+        );
+        assert!(
+            ddl.contains("\"x\"\" text); DROP TABLE t; --\" text"),
+            "field name must stay inside one quoted identifier: {ddl}"
+        );
+    }
 
     #[test]
     fn test_build_fqn() {

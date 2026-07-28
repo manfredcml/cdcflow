@@ -1206,3 +1206,57 @@ async fn test_replication_mode_mongodb_sparse_field_does_not_drop_column() {
         "a field missing from one MongoDB batch must not drop the target column"
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn test_cdc_mode_binary_column_round_trips() {
+    let (_container, host, port) = start_postgres().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let client = connect_client(&host, port).await;
+    client
+        .execute(
+            "CREATE TABLE \"public\".\"files\" (
+                \"_cdc_op\" text,
+                \"_cdc_lsn\" bigint,
+                \"_cdc_timestamp_us\" bigint,
+                \"_cdc_snapshot\" boolean,
+                \"_cdc_schema\" text,
+                \"_cdc_table\" text,
+                \"_cdc_primary_key_columns\" text,
+                \"id\" text,
+                \"blob\" bytea,
+                \"_old_id\" text,
+                \"_old_blob\" bytea
+            )",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let config = make_sink_config(&host, port);
+    let mut sink = PostgresSink::new(config, SinkMode::Cdc, None)
+        .await
+        .unwrap();
+
+    let payload = vec![0x00u8, 0x68, 0x69, 0xff];
+    let event = make_insert_event(
+        "demo",
+        "files",
+        vec![
+            ("id", ColumnValue::Text("f1".into())),
+            ("blob", ColumnValue::Bytes(payload.clone())),
+        ],
+    );
+
+    sink.write_batch(&[event]).await.unwrap();
+    sink.flush().await.unwrap();
+
+    let stored: Vec<u8> = client
+        .query_one("SELECT \"blob\" FROM \"public\".\"files\"", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    assert_eq!(stored, payload);
+}
