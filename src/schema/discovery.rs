@@ -18,6 +18,7 @@ pub async fn fetch_columns(
             fetch_columns_postgres(url, schema, table).await
         }
         SourceConnectionConfig::Mysql { url } => fetch_columns_mysql(url, schema, table).await,
+        SourceConnectionConfig::Mongodb { url } => fetch_columns_mongodb(url, schema, table).await,
     }
 }
 
@@ -32,6 +33,7 @@ pub async fn fetch_primary_keys(
             fetch_primary_keys_postgres(url, schema, table).await
         }
         SourceConnectionConfig::Mysql { url } => fetch_primary_keys_mysql(url, schema, table).await,
+        SourceConnectionConfig::Mongodb { .. } => Ok(vec!["_id".to_string()]),
     }
 }
 
@@ -51,6 +53,9 @@ pub async fn fetch_column_subset(
         }
         SourceConnectionConfig::Mysql { url } => {
             fetch_column_subset_mysql(url, schema, table, column_names).await
+        }
+        SourceConnectionConfig::Mongodb { url } => {
+            fetch_column_subset_mongodb(url, schema, table, column_names).await
         }
     }
 }
@@ -339,4 +344,125 @@ async fn fetch_column_subset_mysql(
         .map_err(|e| CdcError::Schema(format!("mysql disconnect: {e}")))?;
 
     Ok(result)
+}
+
+const SCHEMA_SAMPLE_SIZE: i64 = 100;
+
+/// Cached clients keyed by connection string — discovery runs per write batch,
+/// and building a `mongodb::Client` re-runs topology discovery each time.
+static MONGO_CLIENTS: std::sync::OnceLock<
+    tokio::sync::Mutex<std::collections::HashMap<String, mongodb::Client>>,
+> = std::sync::OnceLock::new();
+
+async fn mongodb_client(url: &str) -> Result<mongodb::Client> {
+    let mut clients = MONGO_CLIENTS
+        .get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .await;
+
+    if let Some(client) = clients.get(url) {
+        return Ok(client.clone());
+    }
+
+    let client = mongodb::Client::with_uri_str(url)
+        .await
+        .map_err(|e| CdcError::Schema(format!("mongodb connect: {e}")))?;
+    clients.insert(url.to_string(), client.clone());
+    Ok(client)
+}
+
+/// Sample documents from both ends of a collection and merge their field types.
+///
+/// Callers treat the result as the current source schema, so both ends matter:
+/// the newest documents carry fields added later, the oldest carry fields only
+/// they still have. Sorted by `_id` to keep the sample stable across runs.
+async fn sample_field_types(
+    coll: &mongodb::Collection<mongodb::bson::Document>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    use futures_util::StreamExt;
+    use mongodb::bson::doc;
+
+    let mut field_types: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+
+    for order in [1, -1] {
+        let mut cursor = coll
+            .find(doc! {})
+            .sort(doc! { "_id": order })
+            .limit(SCHEMA_SAMPLE_SIZE / 2)
+            .await
+            .map_err(|e| CdcError::Schema(format!("mongodb find: {e}")))?;
+
+        while let Some(result) = cursor.next().await {
+            let doc = result.map_err(|e| CdcError::Schema(format!("mongodb cursor: {e}")))?;
+            crate::source::mongodb::bson_mapping::merge_document_field_types(
+                &mut field_types,
+                &doc,
+            );
+        }
+    }
+
+    Ok(field_types)
+}
+
+/// Fetch columns by sampling documents from a MongoDB collection.
+///
+/// Since MongoDB is schemaless, we sample up to `SCHEMA_SAMPLE_SIZE` documents
+/// and build a union of all top-level field names. Types observed for the same
+/// field across documents are merged (nulls ignored, numerics widened,
+/// otherwise falling back to text).
+async fn fetch_columns_mongodb(
+    url: &str,
+    database: &str,
+    collection: &str,
+) -> Result<Vec<ColumnInfo>> {
+    let client = mongodb_client(url).await?;
+    let db = client.database(database);
+    let coll = db.collection::<mongodb::bson::Document>(collection);
+
+    let field_types = sample_field_types(&coll).await?;
+
+    let dialect = SourceDialect::Mongodb;
+    let columns: Vec<ColumnInfo> = field_types
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, type_str))| {
+            let canonical_type = parse_source_type(dialect, &type_str);
+            ColumnInfo {
+                name,
+                source_type: type_str,
+                canonical_type,
+                is_nullable: true,
+                ordinal_position: i as i32,
+            }
+        })
+        .collect();
+
+    Ok(columns)
+}
+
+async fn fetch_column_subset_mongodb(
+    url: &str,
+    database: &str,
+    collection: &str,
+    column_names: &[String],
+) -> Result<Vec<ColumnInfo>> {
+    let all_columns = fetch_columns_mongodb(url, database, collection).await?;
+    let type_map: std::collections::HashMap<String, ColumnInfo> = all_columns
+        .into_iter()
+        .map(|col| (col.name.clone(), col))
+        .collect();
+
+    Ok(column_names
+        .iter()
+        .map(|name| {
+            type_map.get(name).cloned().unwrap_or_else(|| ColumnInfo {
+                name: name.clone(),
+                source_type: "string".into(),
+                canonical_type: super::CanonicalType::Text,
+                is_nullable: true,
+                ordinal_position: 0,
+            })
+        })
+        .collect())
 }

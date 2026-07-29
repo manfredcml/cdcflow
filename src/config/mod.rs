@@ -1,5 +1,6 @@
 mod iceberg_sink;
 mod kafka_sink;
+mod mongodb_source;
 mod mysql_source;
 mod offset;
 mod postgres_sink;
@@ -9,6 +10,7 @@ mod source;
 
 pub use self::iceberg_sink::{IcebergCatalogConfig, IcebergSinkConfig, RestCatalogConfig};
 pub use self::kafka_sink::KafkaSinkConfig;
+pub use self::mongodb_source::MongodbSourceConfig;
 pub use self::mysql_source::MySqlSourceConfig;
 pub use self::offset::OffsetConfig;
 pub use self::postgres_sink::PostgresSinkConfig;
@@ -37,6 +39,8 @@ pub enum SourceConnectionConfig {
     Postgres { url: String },
     #[serde(rename = "mysql")]
     Mysql { url: String },
+    #[serde(rename = "mongodb")]
+    Mongodb { url: String },
 }
 
 /// Top-level configuration for the CDC agent.
@@ -52,6 +56,28 @@ pub struct Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every shipped example config must deserialize, so a config that drifts
+    /// from the schema (wrong field type, renamed key) fails the build rather
+    /// than only failing when a user runs it.
+    #[test]
+    fn test_example_configs_deserialize() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("example/configs");
+        let mut checked = 0;
+
+        for entry in std::fs::read_dir(&dir).expect("example/configs must exist") {
+            let path = entry.expect("readable dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path).expect("readable config");
+            serde_json::from_str::<Config>(&contents)
+                .unwrap_or_else(|e| panic!("{} failed to parse: {e}", path.display()));
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no example configs found in {}", dir.display());
+    }
 
     #[test]
     fn test_sink_mode_default_is_cdc() {

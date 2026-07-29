@@ -15,6 +15,7 @@ use cdcflow::sink::kafka::KafkaSink;
 use cdcflow::sink::postgres::PostgresSink;
 use cdcflow::sink::stdout::StdoutSink;
 use cdcflow::sink::Sink;
+use cdcflow::source::mongodb::MongodbSource;
 use cdcflow::source::mysql::MySqlSource;
 use cdcflow::source::postgres::PostgresSource;
 use cdcflow::worker_http::registration::AdminClient;
@@ -23,7 +24,7 @@ use cdcflow::worker_http::WorkerHttpServer;
 #[derive(Parser, Debug)]
 #[command(
     name = "cdcflow",
-    about = "Change Data Capture agent for PostgreSQL and MySQL"
+    about = "Change Data Capture agent for PostgreSQL, MySQL, and MongoDB"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -640,6 +641,26 @@ async fn run_with_sink<S: Sink>(
             OffsetConfig::Memory => {
                 let os = MemoryOffsetStore::new();
                 let mut pipeline = Pipeline::new(MySqlSource::new(my_config, os.clone()), sink, os);
+                if let Some(m) = metrics {
+                    pipeline = pipeline.with_metrics(m);
+                }
+                pipeline.run(shutdown).await
+            }
+        },
+        SourceConfig::Mongodb(mg_config) => match offset_config {
+            OffsetConfig::Sqlite { path, key } => {
+                let os = SqliteOffsetStore::new(&path, &key)?;
+                let mut pipeline =
+                    Pipeline::new(MongodbSource::new(mg_config, os.clone()), sink, os);
+                if let Some(m) = metrics {
+                    pipeline = pipeline.with_metrics(m);
+                }
+                pipeline.run(shutdown).await
+            }
+            OffsetConfig::Memory => {
+                let os = MemoryOffsetStore::new();
+                let mut pipeline =
+                    Pipeline::new(MongodbSource::new(mg_config, os.clone()), sink, os);
                 if let Some(m) = metrics {
                     pipeline = pipeline.with_metrics(m);
                 }

@@ -42,6 +42,29 @@ async fn start_kafka() -> (ContainerAsync<Kafka>, String) {
     (container, bootstrap_servers)
 }
 
+/// Create a MongoDB-shaped CDC event (schema=database, _id as PK, mixed types).
+fn make_mongo_event(database: &str, collection: &str, id: &str) -> CdcEvent {
+    CdcEvent {
+        lsn: Lsn::ZERO,
+        timestamp_us: 1_700_000_000_000_000,
+        xid: 0,
+        table: TableId {
+            schema: database.into(),
+            name: collection.into(),
+            oid: 0,
+        },
+        op: ChangeOp::Insert,
+        new: Some(BTreeMap::from([
+            ("_id".into(), ColumnValue::Text(id.into())),
+            ("name".into(), ColumnValue::Text("Alice".into())),
+            ("age".into(), ColumnValue::Int(30)),
+            ("active".into(), ColumnValue::Bool(true)),
+        ])),
+        old: None,
+        primary_key_columns: vec!["_id".into()],
+    }
+}
+
 fn make_test_event(schema: &str, table_name: &str, id: &str) -> CdcEvent {
     CdcEvent {
         lsn: Lsn::ZERO,
@@ -167,4 +190,80 @@ async fn test_kafka_sink_message_key() {
 
     let key = msg.key_view::<str>().unwrap().unwrap();
     assert_eq!(key, "myschema.mytable");
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_kafka_sink_with_mongodb_events() {
+    let (_container, brokers) = start_kafka().await;
+
+    let config = KafkaSinkConfig {
+        brokers: brokers.clone(),
+        topic_prefix: "mongo".into(),
+        properties: Default::default(),
+    };
+    let mut sink = KafkaSink::new(config).unwrap();
+
+    // Write MongoDB-shaped events from two collections
+    let events = vec![
+        make_mongo_event("demo", "users", "507f1f77bcf86cd799439011"),
+        make_mongo_event("demo", "users", "507f1f77bcf86cd799439012"),
+        make_mongo_event("demo", "orders", "607f1f77bcf86cd799439099"),
+    ];
+    sink.write_batch(&events).await.unwrap();
+    sink.flush().await.unwrap();
+
+    // Consume and verify topic routing: {prefix}.{database}.{collection}
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("bootstrap.servers", &brokers)
+        .set("group.id", "test-mongo-topics")
+        .set("auto.offset.reset", "earliest")
+        .create()
+        .unwrap();
+
+    consumer
+        .subscribe(&["mongo.demo.users", "mongo.demo.orders"])
+        .unwrap();
+
+    let mut users_messages = Vec::new();
+    let mut orders_messages = Vec::new();
+
+    let consume_result = timeout(Duration::from_secs(15), async {
+        loop {
+            if let Ok(msg) = tokio::time::timeout(Duration::from_secs(2), consumer.recv()).await {
+                let msg = msg.unwrap();
+                let topic = msg.topic().to_string();
+                let payload = msg.payload_view::<str>().unwrap().unwrap().to_string();
+                if topic == "mongo.demo.users" {
+                    users_messages.push(payload);
+                } else if topic == "mongo.demo.orders" {
+                    orders_messages.push(payload);
+                }
+                if users_messages.len() >= 2 && !orders_messages.is_empty() {
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+
+    assert!(consume_result.is_ok(), "failed to consume all messages");
+    assert_eq!(users_messages.len(), 2);
+    assert_eq!(orders_messages.len(), 1);
+
+    // Verify JSON structure contains MongoDB fields
+    // Kafka uses nested format: {metadata, new: {values, types}, old}
+    let user_json: serde_json::Value = serde_json::from_str(&users_messages[0]).unwrap();
+    assert_eq!(user_json["metadata"]["table"], "users");
+    assert_eq!(user_json["metadata"]["schema"], "demo");
+    assert_eq!(user_json["metadata"]["op"], "I");
+    // MongoDB _id should appear in new.values
+    assert!(user_json["new"]["values"]["_id"].is_string());
+    assert_eq!(user_json["new"]["values"]["name"], "Alice");
+    assert_eq!(user_json["new"]["values"]["age"], 30);
+    assert_eq!(user_json["new"]["values"]["active"], true);
+    // Types should reflect ColumnValue variants
+    assert_eq!(user_json["new"]["types"]["_id"], "Text");
+    assert_eq!(user_json["new"]["types"]["age"], "Int");
+    assert_eq!(user_json["new"]["types"]["active"], "Bool");
 }

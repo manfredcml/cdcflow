@@ -11,6 +11,7 @@ use crate::event::ColumnValue;
 pub enum SourceDialect {
     Postgres,
     Mysql,
+    Mongodb,
 }
 
 impl From<&SourceConnectionConfig> for SourceDialect {
@@ -18,6 +19,7 @@ impl From<&SourceConnectionConfig> for SourceDialect {
         match conn {
             SourceConnectionConfig::Postgres { .. } => SourceDialect::Postgres,
             SourceConnectionConfig::Mysql { .. } => SourceDialect::Mysql,
+            SourceConnectionConfig::Mongodb { .. } => SourceDialect::Mongodb,
         }
     }
 }

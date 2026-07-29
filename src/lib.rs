@@ -1,7 +1,7 @@
 //! # cdcflow
 //!
 //! A Change Data Capture (CDC) pipeline that captures row-level changes
-//! from PostgreSQL and MySQL, streaming them to Kafka, PostgreSQL,
+//! from PostgreSQL, MySQL, and MongoDB, streaming them to Kafka, PostgreSQL,
 //! Apache Iceberg, or stdout.
 //!
 //! The pipeline reads events from a [`source`], batches them by transaction
